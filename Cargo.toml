@@ -1,0 +1,37 @@
+[package]
+name = "iron-providers"
+version = "0.1.0"
+edition = "2021"
+authors = ["Paul Mooring"]
+license = "Apache-2.0"
+rust-version = "1.91"
+description = "Semantic provider boundary with OpenAI Responses API support"
+readme = "README.md"
+repository = "https://github.com/AgentIron/iron-providers"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+futures = "0.3"
+pin-project = "1"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# OpenAI SDK - enable features for Responses API
+async-openai = { version = "0.34", features = ["responses", "response-types", "_api"] }
+
+# Async trait support
+async-trait = "0.1"
+
+# Stream utilities
+async-stream = "0.3"
+
+# UUID generation
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tokio = { version = "1", features = ["rt", "macros"] }
+mockito = "1"
