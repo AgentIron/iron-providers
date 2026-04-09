@@ -1,6 +1,6 @@
 [package]
 name = "iron-providers"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Paul Mooring"]
 license = "Apache-2.0"
@@ -8,6 +8,12 @@ rust-version = "1.91"
 description = "Semantic provider boundary with OpenAI Responses API support"
 readme = "README.md"
 repository = "https://github.com/AgentIron/iron-providers"
+exclude = [
+    ".opencode/**",
+    "openspec/**",
+    "tasks.py",
+    "Cargo.lock",
+]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
