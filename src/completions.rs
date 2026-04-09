@@ -8,6 +8,8 @@ use futures::stream::{BoxStream, StreamExt};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use tracing::{debug, trace, warn};
 
 fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> Client {
     let mut headers = reqwest::header::HeaderMap::new();
@@ -217,7 +219,10 @@ struct ChatCompletionStreamChunk {
 
 #[derive(Debug, Deserialize)]
 struct StreamChoice {
+    #[serde(default)]
+    index: u32,
     delta: StreamDelta,
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,6 +233,7 @@ struct StreamDelta {
 
 #[derive(Debug, Deserialize)]
 struct StreamToolCall {
+    index: u32,
     id: Option<String>,
     function: Option<StreamFunction>,
 }
@@ -236,6 +242,133 @@ struct StreamToolCall {
 struct StreamFunction {
     name: Option<String>,
     arguments: Option<String>,
+}
+
+/// Accumulates state for a single tool call being assembled from stream chunks
+#[derive(Debug, Default)]
+struct ToolCallAccumulator {
+    id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+/// Accumulates state for all tool calls in a single choice
+#[derive(Debug, Default)]
+struct ChoiceAccumulator {
+    tool_calls: BTreeMap<u32, ToolCallAccumulator>,
+}
+
+/// Stream assembler that maintains indexed state by choice and tool-call index
+#[derive(Debug, Default)]
+struct StreamAssembler {
+    choices: BTreeMap<u32, ChoiceAccumulator>,
+}
+
+impl StreamAssembler {
+    /// Apply a tool-call delta to the accumulator
+    fn apply_tool_call_delta(&mut self, choice_index: u32, tool_index: u32, delta: &StreamToolCall) {
+        let choice = self.choices.entry(choice_index).or_default();
+        let tool = choice.tool_calls.entry(tool_index).or_default();
+
+        // Update id if present
+        if let Some(ref id) = delta.id {
+            if !id.is_empty() {
+                tool.id = Some(id.clone());
+            }
+        }
+
+        // Update function name if present
+        if let Some(ref func) = delta.function {
+            if let Some(ref name) = func.name {
+                if !name.is_empty() {
+                    tool.name = Some(name.clone());
+                }
+            }
+            // Accumulate arguments
+            if let Some(ref args) = func.arguments {
+                tool.arguments.push_str(args);
+            }
+        }
+    }
+
+    /// Finalize all pending tool calls for a choice and return them in index order
+    fn finalize_choice(&mut self, choice_index: u32) -> Vec<ToolCall> {
+        let mut finalized = Vec::new();
+
+        if let Some(choice) = self.choices.remove(&choice_index) {
+            for (index, tool) in choice.tool_calls {
+                let arguments = if tool.arguments.is_empty() {
+                    Value::Object(serde_json::Map::new())
+                } else {
+                    match serde_json::from_str(&tool.arguments) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            warn!(
+                                choice_index = choice_index,
+                                tool_index = index,
+                                arguments = %tool.arguments,
+                                error = %e,
+                                "Failed to parse tool call arguments as JSON, using raw string"
+                            );
+                            Value::String(tool.arguments.clone())
+                        }
+                    }
+                };
+
+                let id = tool.id.clone().unwrap_or_else(|| {
+                    warn!(
+                        choice_index = choice_index,
+                        tool_index = index,
+                        "Tool call finalized without id, generating fallback"
+                    );
+                    format!("call_{}_{}", choice_index, index)
+                });
+                let name = tool.name.clone().unwrap_or_else(|| {
+                    warn!(
+                        choice_index = choice_index,
+                        tool_index = index,
+                        tool_id = %id,
+                        "Tool call finalized without function name"
+                    );
+                    String::new()
+                });
+
+                trace!(
+                    choice_index = choice_index,
+                    tool_index = index,
+                    tool_id = %id,
+                    tool_name = %name,
+                    "Finalizing tool call"
+                );
+
+                finalized.push(ToolCall::new(id, name, arguments));
+            }
+        }
+
+        finalized
+    }
+
+    /// Finalize all remaining pending state (safety flush for [DONE])
+    fn finalize_all(&mut self) -> Vec<ToolCall> {
+        let mut finalized = Vec::new();
+        let choice_indices: Vec<u32> = self.choices.keys().copied().collect();
+
+        for choice_index in choice_indices {
+            debug!(
+                choice_index = choice_index,
+                "Safety flush for pending tool calls at [DONE]"
+            );
+            let mut tools = self.finalize_choice(choice_index);
+            finalized.append(&mut tools);
+        }
+
+        finalized
+    }
+
+    /// Check if there are any pending tool calls
+    fn has_pending(&self) -> bool {
+        !self.choices.is_empty()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -392,7 +525,7 @@ fn process_sse_stream(
     let byte_stream = response.bytes_stream();
 
     let mut buffer = String::new();
-    let mut tool_call_accumulator: Option<ToolCallAccumulator> = None;
+    let mut assembler = StreamAssembler::default();
 
     byte_stream.flat_map(move |chunk_result| {
         let mut events: Vec<ProviderResult<ProviderEvent>> = Vec::new();
@@ -411,15 +544,21 @@ fn process_sse_stream(
 
                     if let Some(data) = line.strip_prefix("data: ") {
                         if data == "[DONE]" {
+                            // Safety flush: finalize any pending tool calls before Complete
+                            if assembler.has_pending() {
+                                debug!("[DONE] received with pending tool calls, performing safety flush");
+                                let tool_calls = assembler.finalize_all();
+                                for tool_call in tool_calls {
+                                    events.push(Ok(ProviderEvent::ToolCall { call: tool_call }));
+                                }
+                            }
                             events.push(Ok(ProviderEvent::Complete));
                             continue;
                         }
 
                         if let Ok(chunk) = serde_json::from_str::<ChatCompletionStreamChunk>(data) {
-                            let (mut new_events, new_accum) =
-                                process_stream_chunk(chunk, tool_call_accumulator.take());
-                            events.append(&mut new_events);
-                            tool_call_accumulator = new_accum;
+                            let new_events = process_stream_chunk(chunk, &mut assembler);
+                            events.extend(new_events);
                         }
                     }
                 }
@@ -433,23 +572,16 @@ fn process_sse_stream(
     })
 }
 
-struct ToolCallAccumulator {
-    id: String,
-    name: String,
-    arguments: String,
-}
-
 fn process_stream_chunk(
     chunk: ChatCompletionStreamChunk,
-    accumulator: Option<ToolCallAccumulator>,
-) -> (
-    Vec<ProviderResult<ProviderEvent>>,
-    Option<ToolCallAccumulator>,
-) {
+    assembler: &mut StreamAssembler,
+) -> Vec<ProviderResult<ProviderEvent>> {
     let mut events = Vec::new();
-    let mut acc = accumulator;
 
     for choice in chunk.choices {
+        let choice_index = choice.index;
+
+        // Emit text content immediately
         if let Some(ref content) = choice.delta.content {
             if !content.is_empty() {
                 events.push(Ok(ProviderEvent::Output {
@@ -458,48 +590,30 @@ fn process_stream_chunk(
             }
         }
 
+        // Accumulate tool-call deltas
         if let Some(tool_calls) = choice.delta.tool_calls {
             for tc in tool_calls {
-                if let Some(ref id) = tc.id {
-                    if let Some(existing) = acc.take() {
-                        let arguments = serde_json::from_str(&existing.arguments)
-                            .unwrap_or(Value::String(existing.arguments.clone()));
-                        events.push(Ok(ProviderEvent::ToolCall {
-                            call: ToolCall::new(existing.id, existing.name, arguments),
-                        }));
-                    }
-                    acc = Some(ToolCallAccumulator {
-                        id: id.clone(),
-                        name: String::new(),
-                        arguments: String::new(),
-                    });
-                }
+                assembler.apply_tool_call_delta(choice_index, tc.index, &tc);
+            }
+        }
 
-                if let Some(ref function) = tc.function {
-                    if let Some(ref name) = function.name {
-                        if let Some(ref mut a) = acc {
-                            a.name = name.clone();
-                        }
-                    }
-                    if let Some(ref args) = function.arguments {
-                        if let Some(ref mut a) = acc {
-                            a.arguments.push_str(args);
-                        }
-                    }
-                }
+        // Check for semantic completion boundary
+        if let Some(ref finish_reason) = choice.finish_reason {
+            debug!(
+                choice_index = choice_index,
+                finish_reason = %finish_reason,
+                "Choice reached completion boundary"
+            );
+
+            // Finalize all pending tool calls for this choice
+            let finalized = assembler.finalize_choice(choice_index);
+            for tool_call in finalized {
+                events.push(Ok(ProviderEvent::ToolCall { call: tool_call }));
             }
         }
     }
 
-    if let Some(existing) = acc.take() {
-        let arguments = serde_json::from_str(&existing.arguments)
-            .unwrap_or(Value::String(existing.arguments.clone()));
-        events.push(Ok(ProviderEvent::ToolCall {
-            call: ToolCall::new(existing.id, existing.name, arguments),
-        }));
-    }
-
-    (events, None)
+    events
 }
 
 fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {

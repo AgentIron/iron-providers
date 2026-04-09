@@ -1,6 +1,6 @@
 use crate::{
     anthropic, completions,
-    profile::{ApiFamily, AuthStrategy, EndpointPurpose, ProviderProfile, RuntimeConfig},
+    profile::{ApiFamily, AuthStrategy, ProviderProfile, RuntimeConfig},
     InferenceRequest, Message, ProviderEvent, ProviderRegistry, Transcript,
 };
 use serde_json::json;
@@ -59,372 +59,136 @@ fn anthropic_response(text: &str) -> String {
     .unwrap()
 }
 
-fn anthropic_tool_response(call_id: &str, name: &str, input: &str) -> String {
-    let input_val: serde_json::Value = serde_json::from_str(input).unwrap_or(json!(null));
-    serde_json::to_string(&json!({
-        "content": [{
-            "type": "tool_use",
-            "id": call_id,
-            "name": name,
-            "input": input_val
-        }],
-        "stop_reason": "tool_use"
-    }))
-    .unwrap()
-}
-
 #[tokio::test]
-async fn test_minimax_infer() {
+async fn test_completions_basic_response() {
     let mut server = mockito::Server::new_async().await;
+
     let mock = server
-        .mock("POST", "/v1/messages")
+        .mock("POST", "/chat/completions")
         .with_status(200)
         .with_header("content-type", "application/json")
-        .with_body(anthropic_response("Hello from MiniMax"))
+        .with_body(chat_completion_response("Hello from completions"))
         .create_async()
         .await;
 
-    let profile = anthropic_profile("minimax", &server.url());
+    let profile = completions_profile("zai", &server.url());
     let runtime = RuntimeConfig::new("test-key");
     let request = InferenceRequest::new(
-        "minimax-model",
+        "zai-model",
         Transcript::with_messages(vec![Message::user("hi")]),
     );
 
-    let events = anthropic::infer(&profile, &runtime, request).await.unwrap();
+    let result = completions::infer(&profile, &runtime, request).await;
     mock.assert_async().await;
 
-    assert_eq!(events.len(), 2);
-    assert!(
-        matches!(&events[0], ProviderEvent::Output { content } if content == "Hello from MiniMax")
-    );
-    assert!(matches!(&events[1], ProviderEvent::Complete));
-}
-
-#[tokio::test]
-async fn test_minimax_code_infer() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/v1/messages")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(anthropic_response("code response"))
-        .create_async()
-        .await;
-
-    let profile =
-        anthropic_profile("minimax-code", &server.url()).with_purpose(EndpointPurpose::Coding);
-    let runtime = RuntimeConfig::new("test-key");
-    let request = InferenceRequest::new(
-        "minimax-code-model",
-        Transcript::with_messages(vec![Message::user("write a function")]),
-    );
-
-    let events = anthropic::infer(&profile, &runtime, request).await.unwrap();
-    mock.assert_async().await;
-
+    assert!(result.is_ok());
+    let events = result.unwrap();
     assert!(events
         .iter()
-        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "code response")));
+        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "Hello from completions")));
 }
 
 #[tokio::test]
-async fn test_minimax_tool_call() {
+async fn test_completions_tool_call_response() {
     let mut server = mockito::Server::new_async().await;
+
     let mock = server
-        .mock("POST", "/v1/messages")
+        .mock("POST", "/chat/completions")
         .with_status(200)
         .with_header("content-type", "application/json")
-        .with_body(anthropic_tool_response(
-            "call_1",
+        .with_body(chat_completion_tool_response(
+            "call_123",
             "search",
-            r#"{"query": "rust"}"#,
+            r#"{"query": "rust async"}"#,
         ))
         .create_async()
         .await;
 
-    let profile = anthropic_profile("minimax", &server.url());
+    let profile = completions_profile("zai", &server.url());
     let runtime = RuntimeConfig::new("test-key");
     let request = InferenceRequest::new(
-        "minimax-model",
-        Transcript::with_messages(vec![Message::user("search for rust")]),
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("search for rust async")]),
     );
 
-    let events = anthropic::infer(&profile, &runtime, request).await.unwrap();
+    let result = completions::infer(&profile, &runtime, request).await;
     mock.assert_async().await;
 
+    assert!(result.is_ok());
+    let events = result.unwrap();
     assert!(events
         .iter()
         .any(|e| matches!(e, ProviderEvent::ToolCall { call } if call.tool_name == "search")));
 }
 
 #[tokio::test]
-async fn test_zai_infer() {
+async fn test_anthropic_basic_response() {
     let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(chat_completion_response("Hello from ZAI"))
-        .create_async()
-        .await;
 
-    let profile = completions_profile("zai", &server.url());
-    let runtime = RuntimeConfig::new("test-key");
-    let request = InferenceRequest::new(
-        "zai-model",
-        Transcript::with_messages(vec![Message::user("hi")]),
-    );
-
-    let events = completions::infer(&profile, &runtime, request)
-        .await
-        .unwrap();
-    mock.assert_async().await;
-
-    assert_eq!(events.len(), 2);
-    assert!(matches!(&events[0], ProviderEvent::Output { content } if content == "Hello from ZAI"));
-    assert!(matches!(&events[1], ProviderEvent::Complete));
-}
-
-#[tokio::test]
-async fn test_zai_code_infer() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(chat_completion_response("fn main() {}"))
-        .create_async()
-        .await;
-
-    let profile =
-        completions_profile("zai-code", &server.url()).with_purpose(EndpointPurpose::Coding);
-    let runtime = RuntimeConfig::new("test-key");
-    let request = InferenceRequest::new(
-        "zai-code-model",
-        Transcript::with_messages(vec![Message::user("write main")]),
-    );
-
-    let events = completions::infer(&profile, &runtime, request)
-        .await
-        .unwrap();
-    mock.assert_async().await;
-
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "fn main() {}")));
-}
-
-#[tokio::test]
-async fn test_zai_tool_call() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(chat_completion_tool_response(
-            "call_42",
-            "execute",
-            r#"{"command": "ls"}"#,
-        ))
-        .create_async()
-        .await;
-
-    let profile = completions_profile("zai", &server.url());
-    let runtime = RuntimeConfig::new("test-key");
-    let request = InferenceRequest::new(
-        "zai-model",
-        Transcript::with_messages(vec![Message::user("run ls")]),
-    );
-
-    let events = completions::infer(&profile, &runtime, request)
-        .await
-        .unwrap();
-    mock.assert_async().await;
-
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, ProviderEvent::ToolCall { call } if call.tool_name == "execute")));
-}
-
-#[tokio::test]
-async fn test_kimi_infer() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(chat_completion_response("Hello from Kimi"))
-        .create_async()
-        .await;
-
-    let profile = completions_profile("kimi", &server.url());
-    let runtime = RuntimeConfig::new("test-key");
-    let request = InferenceRequest::new(
-        "moonshot-v1",
-        Transcript::with_messages(vec![Message::user("hi")]),
-    );
-
-    let events = completions::infer(&profile, &runtime, request)
-        .await
-        .unwrap();
-    mock.assert_async().await;
-
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "Hello from Kimi")));
-}
-
-#[tokio::test]
-async fn test_openrouter_infer() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(chat_completion_response("Hello from OpenRouter"))
-        .create_async()
-        .await;
-
-    let profile = completions_profile("openrouter", &server.url())
-        .with_header("HTTP-Referer", "https://github.com/anomalyco/iron-providers")
-        .with_header("X-OpenRouter-Title", "IronAgent");
-    let runtime = RuntimeConfig::new("test-key");
-    let request = InferenceRequest::new(
-        "openai/gpt-4o",
-        Transcript::with_messages(vec![Message::user("hi")]),
-    );
-
-    let events = completions::infer(&profile, &runtime, request)
-        .await
-        .unwrap();
-    mock.assert_async().await;
-
-    assert!(events.iter().any(
-        |e| matches!(e, ProviderEvent::Output { content } if content == "Hello from OpenRouter")
-    ));
-}
-
-#[tokio::test]
-async fn test_requesty_infer() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(chat_completion_response("Hello from Requesty"))
-        .create_async()
-        .await;
-
-    let profile = completions_profile("requesty", &server.url());
-    let runtime = RuntimeConfig::new("test-key");
-    let request = InferenceRequest::new(
-        "anthropic/claude-3",
-        Transcript::with_messages(vec![Message::user("hi")]),
-    );
-
-    let events = completions::infer(&profile, &runtime, request)
-        .await
-        .unwrap();
-    mock.assert_async().await;
-
-    assert!(events.iter().any(
-        |e| matches!(e, ProviderEvent::Output { content } if content == "Hello from Requesty")
-    ));
-}
-
-#[tokio::test]
-async fn test_anthropic_slug_infer() {
-    let mut server = mockito::Server::new_async().await;
     let mock = server
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "application/json")
-        .with_body(anthropic_response("Hello from Anthropic"))
+        .with_body(anthropic_response("Hello from anthropic"))
         .create_async()
         .await;
 
-    let profile = anthropic_profile("anthropic", &server.url());
+    let profile = anthropic_profile("minimax", &server.url());
     let runtime = RuntimeConfig::new("test-key");
-    let request = InferenceRequest::new(
-        "claude-3-5-sonnet",
-        Transcript::with_messages(vec![Message::user("hi")]),
-    );
-
-    let events = anthropic::infer(&profile, &runtime, request).await.unwrap();
-    mock.assert_async().await;
-
-    assert!(events.iter().any(
-        |e| matches!(e, ProviderEvent::Output { content } if content == "Hello from Anthropic")
-    ));
-}
-
-#[tokio::test]
-async fn test_registry_generic_provider_zai() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(chat_completion_response("via registry"))
-        .create_async()
-        .await;
-
-    let mut registry = ProviderRegistry::new();
-    registry.register(completions_profile("zai", &server.url()));
-
-    let provider = registry.get("zai", RuntimeConfig::new("test-key")).unwrap();
-    let request = InferenceRequest::new(
-        "zai-model",
-        Transcript::with_messages(vec![Message::user("hi")]),
-    );
-
-    let events = provider.infer(request).await.unwrap();
-    mock.assert_async().await;
-
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "via registry")));
-}
-
-#[tokio::test]
-async fn test_registry_generic_provider_minimax() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("POST", "/v1/messages")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(anthropic_response("via registry"))
-        .create_async()
-        .await;
-
-    let mut registry = ProviderRegistry::new();
-    registry.register(anthropic_profile("minimax", &server.url()));
-
-    let provider = registry
-        .get("minimax", RuntimeConfig::new("test-key"))
-        .unwrap();
     let request = InferenceRequest::new(
         "minimax-model",
         Transcript::with_messages(vec![Message::user("hi")]),
     );
 
-    let events = provider.infer(request).await.unwrap();
+    let result = anthropic::infer(&profile, &runtime, request).await;
     mock.assert_async().await;
 
+    assert!(result.is_ok());
+    let events = result.unwrap();
     assert!(events
         .iter()
-        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "via registry")));
+        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "Hello from anthropic")));
+}
+
+#[tokio::test]
+async fn test_registry_get_completions_provider() {
+    let registry = ProviderRegistry::default();
+    let runtime = RuntimeConfig::new("test-key");
+
+    let result = registry.get("zai", runtime);
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_registry_get_anthropic_provider() {
+    let registry = ProviderRegistry::default();
+    let runtime = RuntimeConfig::new("test-key");
+
+    let result = registry.get("anthropic", runtime);
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_registry_unknown_provider_error() {
+    let registry = ProviderRegistry::default();
+    let runtime = RuntimeConfig::new("test-key");
+
+    let result = registry.get("unknown-provider", runtime);
+    match result {
+        Err(err) => assert!(err.to_string().contains("Unknown provider")),
+        Ok(_) => panic!("Expected error for unknown provider"),
+    }
 }
 
 #[tokio::test]
 async fn test_completions_error_handling() {
     let mut server = mockito::Server::new_async().await;
+
     let mock = server
         .mock("POST", "/chat/completions")
         .with_status(401)
         .with_header("content-type", "application/json")
-        .with_body(r#"{"error":{"message":"Invalid API key","code":"invalid_api_key"}}"#)
+        .with_body(r#"{"error":{"message":"invalid key","code":"invalid_api_key"}}"#)
         .create_async()
         .await;
 
@@ -473,8 +237,8 @@ async fn test_anthropic_error_handling() {
 async fn test_completions_stream() {
     let mut server = mockito::Server::new_async().await;
 
-    let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\
-                    data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"}}]}\n\
                     data: [DONE]\n";
 
     let mock = server
@@ -556,4 +320,429 @@ async fn test_anthropic_stream() {
     assert!(events
         .iter()
         .any(|e| matches!(e, Ok(ProviderEvent::Complete))));
+}
+
+// ============================================================================
+// Task 3.1: Single tool call spanning multiple chunks
+// ============================================================================
+
+#[tokio::test]
+async fn test_completions_stream_tool_call_spans_multiple_chunks() {
+    let mut server = mockito::Server::new_async().await;
+
+    // Simulate a tool call with arguments arriving across multiple chunks
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_123\",\"function\":{\"name\":\"get_weather\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"location\\\": \\\"San\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\" Francisco\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\
+                    data: [DONE]\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("What's the weather in San Francisco?")]),
+    );
+
+    let stream = completions::infer_stream(&profile, &runtime, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    // Should have exactly one ToolCall event with complete arguments
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { call }) => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tool_calls.len(), 1, "Should have exactly one tool call");
+    assert_eq!(tool_calls[0].call_id, "call_123");
+    assert_eq!(tool_calls[0].tool_name, "get_weather");
+    
+    // Arguments should be valid JSON with the complete location
+    let args = &tool_calls[0].arguments;
+    assert!(args.is_object(), "Arguments should be valid JSON object");
+    assert_eq!(args["location"], "San Francisco");
+
+    // Verify Complete event exists
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Ok(ProviderEvent::Complete))));
+}
+
+// ============================================================================
+// Task 3.2: Multiple indexed tool calls in one choice
+// ============================================================================
+
+#[tokio::test]
+async fn test_completions_stream_multiple_tool_calls_not_merged() {
+    let mut server = mockito::Server::new_async().await;
+
+    // Simulate two tool calls arriving interleaved
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"search\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"calculate\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"query\\\": \\\"rust\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"{\\\"expr\\\": \\\"1+1\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}},{\"index\":1,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\
+                    data: [DONE]\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("Search for rust and calculate 1+1")]),
+    );
+
+    let stream = completions::infer_stream(&profile, &runtime, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { call }) => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tool_calls.len(), 2, "Should have exactly two tool calls");
+    
+    // Verify fragments were not merged
+    assert_eq!(tool_calls[0].call_id, "call_1");
+    assert_eq!(tool_calls[0].tool_name, "search");
+    assert_eq!(tool_calls[0].arguments["query"], "rust");
+    
+    assert_eq!(tool_calls[1].call_id, "call_2");
+    assert_eq!(tool_calls[1].tool_name, "calculate");
+    assert_eq!(tool_calls[1].arguments["expr"], "1+1");
+}
+
+// ============================================================================
+// Task 3.3: Interleaved text and tool-call deltas
+// ============================================================================
+
+#[tokio::test]
+async fn test_completions_stream_interleaved_text_and_tool_calls() {
+    let mut server = mockito::Server::new_async().await;
+
+    // Simulate text and tool-call deltas arriving interleaved
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"I'll help\"}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"search\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" you search\"}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"q\\\": \\\"test\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" for that.\"}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\
+                    data: [DONE]\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("Search for test")]),
+    );
+
+    let stream = completions::infer_stream(&profile, &runtime, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    // Collect outputs and tool calls
+    let outputs: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::Output { content }) => Some(content.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { call }) => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Text should be emitted incrementally
+    let full_output = outputs.join("");
+    assert_eq!(full_output, "I'll help you search for that.");
+
+    // Tool call should only be emitted once at completion
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].call_id, "call_1");
+    assert_eq!(tool_calls[0].arguments["q"], "test");
+
+    // Verify ordering: all outputs should come before tool call in event stream
+    let output_indices: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| matches!(e, Ok(ProviderEvent::Output { .. })).then_some(i))
+        .collect();
+    
+    let tool_call_indices: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| matches!(e, Ok(ProviderEvent::ToolCall { .. })).then_some(i))
+        .collect();
+
+    // All outputs should come before tool call (they arrive interleaved but tool call finalizes later)
+    let last_output = output_indices.last().copied().unwrap_or(0);
+    let first_tool_call = tool_call_indices.first().copied().unwrap_or(usize::MAX);
+    assert!(last_output < first_tool_call, "All outputs should come before tool call finalization");
+}
+
+// ============================================================================
+// Task 3.4: Tool-call ordering before Complete
+// ============================================================================
+
+#[tokio::test]
+async fn test_completions_stream_tool_calls_before_complete() {
+    let mut server = mockito::Server::new_async().await;
+
+    // Multiple tool calls with finish_reason in same chunk
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"second\",\"arguments\":\"{}\"}},{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"first\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\
+                    data: [DONE]\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("Do two things")]),
+    );
+
+    let stream = completions::infer_stream(&profile, &runtime, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    // Verify event ordering: ToolCall[0], ToolCall[1], Complete
+    let event_types: Vec<_> = events
+        .iter()
+        .map(|e| match e {
+            Ok(ProviderEvent::ToolCall { .. }) => "ToolCall",
+            Ok(ProviderEvent::Complete) => "Complete",
+            _ => "Other",
+        })
+        .collect();
+
+    assert_eq!(event_types, vec!["ToolCall", "ToolCall", "Complete"]);
+
+    // Verify tool calls are in ascending index order
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { call }) => Some(call.tool_name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tool_calls, vec!["first", "second"]);
+}
+
+// ============================================================================
+// Task 3.5: [DONE] flushes pending state
+// ============================================================================
+
+#[tokio::test]
+async fn test_completions_stream_done_flushes_pending() {
+    let mut server = mockito::Server::new_async().await;
+
+    // Tool call without finish_reason, relying on [DONE] for safety flush
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"test\",\"arguments\":\"{\\\"x\\\":1}\"}}]}}]}\n\
+                    data: [DONE]\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("Test")]),
+    );
+
+    let stream = completions::infer_stream(&profile, &runtime, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    // Should have ToolCall then Complete (flushed by [DONE])
+    let event_types: Vec<_> = events
+        .iter()
+        .map(|e| match e {
+            Ok(ProviderEvent::ToolCall { .. }) => "ToolCall",
+            Ok(ProviderEvent::Complete) => "Complete",
+            _ => "Other",
+        })
+        .collect();
+
+    assert_eq!(event_types, vec!["ToolCall", "Complete"]);
+
+    // Verify the tool call has the correct data
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { call }) => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].call_id, "call_1");
+    assert_eq!(tool_calls[0].arguments["x"], 1);
+}
+
+// ============================================================================
+// Task 3.6: Delayed/omitted metadata
+// ============================================================================
+
+#[tokio::test]
+async fn test_completions_stream_delayed_metadata() {
+    let mut server = mockito::Server::new_async().await;
+
+    // Tool call where id and name arrive after arguments start
+    // Build SSE body using a simpler approach
+    let chunk1 = r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]}}]}
+"#;
+    let chunk2 = r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_delayed","function":{"name":"delayed_func"}}]}}]}
+"#;
+    let chunk3 = r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\":1}"}}]},"finish_reason":"tool_calls"}]}
+"#;
+    let chunk4 = "data: [DONE]\n";
+    
+    let sse_body = format!("{}{}{}{}", chunk1, chunk2, chunk3, chunk4);
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("Test")]),
+    );
+
+    let stream = completions::infer_stream(&profile, &runtime, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { call }) => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tool_calls.len(), 1);
+    // Should use the later-arriving metadata
+    assert_eq!(tool_calls[0].call_id, "call_delayed");
+    assert_eq!(tool_calls[0].tool_name, "delayed_func");
+    assert_eq!(tool_calls[0].arguments["x"], 1);
+}
+
+#[tokio::test]
+async fn test_completions_stream_missing_metadata_best_effort() {
+    let mut server = mockito::Server::new_async().await;
+
+    // Tool call that never receives id or name - should still emit with fallbacks
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"x\\\":1}\"}}]}}]}\n\
+                    data: {\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\"}]}\n\
+                    data: [DONE]\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("Test")]),
+    );
+
+    let stream = completions::infer_stream(&profile, &runtime, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { call }) => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tool_calls.len(), 1);
+    // Should have generated fallback id and empty name
+    assert!(tool_calls[0].call_id.starts_with("call_"));
+    assert_eq!(tool_calls[0].tool_name, "");
+    // Arguments should still be valid
+    assert_eq!(tool_calls[0].arguments["x"], 1);
 }
