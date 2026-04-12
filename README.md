@@ -15,16 +15,17 @@ Normalizes requests and responses across OpenAI Responses, OpenAI Chat Completio
 
 Built-in provider profiles are identified by slug. Each slug maps to a specific API family, base URL, and authentication strategy.
 
-| Slug | API Family | Purpose | Auth |
-| --- | --- | --- | --- |
-| `anthropic` | Anthropic Messages | General | `x-api-key` header |
-| `minimax` | Anthropic Messages | General | Bearer token |
-| `minimax-code` | Anthropic Messages | Coding | Bearer token |
-| `zai` | OpenAI Chat Completions | General | Bearer token |
-| `zai-code` | OpenAI Chat Completions | Coding | Bearer token |
-| `kimi` | OpenAI Chat Completions | General | Bearer token |
-| `openrouter` | OpenAI Chat Completions | General | Bearer token |
-| `requesty` | OpenAI Chat Completions | General | Bearer token |
+| Slug | models.dev ID | API Family | Purpose | Auth |
+| --- | --- | --- | --- | --- |
+| `anthropic` | `anthropic` | Anthropic Messages | General | `x-api-key` header |
+| `minimax` | `minimax` | Anthropic Messages | General | Bearer token |
+| `minimax-code` | `minimax-coding-plan` | Anthropic Messages | Coding | Bearer token |
+| `zai` | `zai` | OpenAI Chat Completions | General | Bearer token |
+| `zai-code` | `zai-coding-plan` | OpenAI Chat Completions | Coding | Bearer token |
+| `kimi` | `moonshotai` | OpenAI Chat Completions | General | Bearer token |
+| `kimi-code` | `kimi-for-coding` | Anthropic Messages | Coding | `x-api-key` header |
+| `openrouter` | `openrouter` | OpenAI Chat Completions | General | Bearer token |
+| `requesty` | `requesty` | OpenAI Chat Completions | General | Bearer token |
 
 Coding-purpose slugs route to endpoints optimized for code generation tasks.
 
@@ -92,7 +93,19 @@ let profile = registry.resolve_by_url("https://api.openai.com/v1/chat/completion
 
 ```rust
 let slugs: Vec<&str> = registry.slugs();
-// Returns sorted list: ["anthropic", "kimi", "minimax", "minimax-code", "openrouter", "requesty", "zai", "zai-code"]
+// Returns sorted list: ["anthropic", "kimi", "kimi-code", "minimax", "minimax-code", "openrouter", "requesty", "zai", "zai-code"]
+```
+
+### models.dev Integration
+
+Built-in and custom profiles can optionally declare a distinct `models.dev` provider
+identifier for client-side model discovery and caching.
+
+```rust
+let profile = ProviderProfile::new("kimi", ApiFamily::OpenAiChatCompletions, "https://api.moonshot.ai/v1")
+    .with_models_dev_id("moonshotai");
+
+assert_eq!(profile.models_dev_slug(), "moonshotai");
 ```
 
 ## Provider Trait
@@ -110,7 +123,7 @@ The `GenericProvider` dispatches to the correct adapter (Responses, Chat Complet
 
 ## Key Types
 
-- `ProviderProfile` — Slug, API family, base URL, auth strategy, headers, purpose, and quirks.
+- `ProviderProfile` — Slug, optional models.dev ID, API family, base URL, auth strategy, headers, purpose, and quirks.
 - `RuntimeConfig` — API key and optional default model for a session.
 - `InferenceRequest` — Normalized request with model, transcript, tools, and generation config.
 - `ProviderEvent` — Streamed events: `Output`, `ToolCall`, `Complete`, `Error`, `Status`.

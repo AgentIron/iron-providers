@@ -39,6 +39,8 @@ pub struct ProviderQuirks {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderProfile {
     pub slug: String,
+    #[serde(default)]
+    pub models_dev_id: Option<String>,
     pub family: ApiFamily,
     pub base_url: String,
     pub auth_strategy: AuthStrategy,
@@ -53,6 +55,7 @@ impl ProviderProfile {
     pub fn new(slug: impl Into<String>, family: ApiFamily, base_url: impl Into<String>) -> Self {
         Self {
             slug: slug.into(),
+            models_dev_id: None,
             family,
             base_url: base_url.into(),
             auth_strategy: AuthStrategy::BearerToken,
@@ -64,6 +67,11 @@ impl ProviderProfile {
 
     pub fn with_auth(mut self, strategy: AuthStrategy) -> Self {
         self.auth_strategy = strategy;
+        self
+    }
+
+    pub fn with_models_dev_id(mut self, models_dev_id: impl Into<String>) -> Self {
+        self.models_dev_id = Some(models_dev_id.into());
         self
     }
 
@@ -80,6 +88,10 @@ impl ProviderProfile {
     pub fn with_quirks(mut self, quirks: ProviderQuirks) -> Self {
         self.quirks = quirks;
         self
+    }
+
+    pub fn models_dev_slug(&self) -> &str {
+        self.models_dev_id.as_deref().unwrap_or(&self.slug)
     }
 }
 

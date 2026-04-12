@@ -66,6 +66,14 @@ impl ProviderRegistry {
         None
     }
 
+    pub fn resolve_by_models_dev_id(&self, models_dev_id: &str) -> Option<&ProviderProfile> {
+        self.profiles.values().find(|profile| {
+            profile
+                .models_dev_slug()
+                .eq_ignore_ascii_case(models_dev_id)
+        })
+    }
+
     pub fn slugs(&self) -> Vec<&str> {
         let mut slugs: Vec<&str> = self.profiles.keys().map(|s| s.as_str()).collect();
         slugs.sort();
@@ -99,6 +107,7 @@ impl ProviderRegistry {
                 ApiFamily::AnthropicMessages,
                 "https://api.minimax.io/anthropic",
             )
+            .with_models_dev_id("minimax-coding-plan")
             .with_auth(AuthStrategy::BearerToken)
             .with_purpose(EndpointPurpose::Coding),
         );
@@ -115,14 +124,31 @@ impl ProviderRegistry {
                 ApiFamily::OpenAiChatCompletions,
                 "https://api.z.ai/api/coding/paas/v4",
             )
+            .with_models_dev_id("zai-coding-plan")
             .with_purpose(EndpointPurpose::Coding),
         );
 
-        self.register(ProviderProfile::new(
-            "kimi",
-            ApiFamily::OpenAiChatCompletions,
-            "https://api.moonshot.ai/v1",
-        ));
+        self.register(
+            ProviderProfile::new(
+                "kimi",
+                ApiFamily::OpenAiChatCompletions,
+                "https://api.moonshot.ai/v1",
+            )
+            .with_models_dev_id("moonshotai"),
+        );
+
+        self.register(
+            ProviderProfile::new(
+                "kimi-code",
+                ApiFamily::AnthropicMessages,
+                "https://api.kimi.com/coding/v1",
+            )
+            .with_models_dev_id("kimi-for-coding")
+            .with_auth(AuthStrategy::ApiKeyHeader {
+                header_name: "x-api-key".into(),
+            })
+            .with_purpose(EndpointPurpose::Coding),
+        );
 
         self.register(
             ProviderProfile::new(
@@ -197,6 +223,7 @@ mod tests {
         assert!(slugs.contains(&"zai"));
         assert!(slugs.contains(&"zai-code"));
         assert!(slugs.contains(&"kimi"));
+        assert!(slugs.contains(&"kimi-code"));
         assert!(slugs.contains(&"openrouter"));
         assert!(slugs.contains(&"requesty"));
     }
@@ -210,6 +237,33 @@ mod tests {
 
         assert_eq!(minimax.purpose, EndpointPurpose::General);
         assert_eq!(minimax_code.purpose, EndpointPurpose::Coding);
+    }
+
+    #[test]
+    fn test_models_dev_id_resolution() {
+        let registry = ProviderRegistry::default();
+
+        let kimi = registry
+            .resolve_by_models_dev_id("moonshotai")
+            .expect("moonshotai");
+        let kimi_code = registry
+            .resolve_by_models_dev_id("kimi-for-coding")
+            .expect("kimi-for-coding");
+        let zai = registry
+            .resolve_by_models_dev_id("zai")
+            .expect("zai falls back to slug");
+
+        assert_eq!(kimi.slug, "kimi");
+        assert_eq!(kimi_code.slug, "kimi-code");
+        assert_eq!(kimi_code.family, ApiFamily::AnthropicMessages);
+        assert_eq!(
+            kimi_code.auth_strategy,
+            AuthStrategy::ApiKeyHeader {
+                header_name: "x-api-key".into()
+            }
+        );
+        assert_eq!(kimi_code.purpose, EndpointPurpose::Coding);
+        assert_eq!(zai.slug, "zai");
     }
 
     #[test]
