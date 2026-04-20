@@ -274,8 +274,12 @@ fn response_to_events(response: AnthropicResponse) -> Vec<ProviderEvent> {
                 }
             }
             "tool_use" => {
-                let call_id = block.id.unwrap_or_default();
-                let tool_name = block.name.unwrap_or_default();
+                let (call_id, tool_name) = resolve_tool_identity(
+                    block.id.as_deref(),
+                    block.name.as_deref(),
+                    None,
+                    "non-streaming response block",
+                );
                 let arguments = block.input.unwrap_or(Value::Null);
                 if tool_name == CHOICE_REQUEST_TOOL_NAME {
                     match ChoiceRequest::from_value(arguments) {
@@ -431,6 +435,49 @@ fn process_sse_stream(
     })
 }
 
+/// Resolve a tool call's identity, warning on missing fields and synthesizing
+/// a stable fallback `id` so downstream code can still route the call.
+///
+/// A missing `name` is left empty and logged — callers cannot route the call
+/// without a name, but surfacing it as a `ToolCall` with an empty name is
+/// consistent with the Chat Completions adapter and keeps contract parity.
+fn resolve_tool_identity(
+    id: Option<&str>,
+    name: Option<&str>,
+    block_index: Option<u32>,
+    origin: &str,
+) -> (String, String) {
+    let id = match id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(id) => id.to_string(),
+        None => {
+            let fallback = match block_index {
+                Some(i) => format!("call_anthropic_{}", i),
+                None => format!("call_anthropic_{}", uuid::Uuid::new_v4()),
+            };
+            warn!(
+                origin = origin,
+                block_index = ?block_index,
+                fallback_id = %fallback,
+                "Anthropic tool_use block missing id, generating fallback"
+            );
+            fallback
+        }
+    };
+    let name = match name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) => name.to_string(),
+        None => {
+            warn!(
+                origin = origin,
+                block_index = ?block_index,
+                tool_id = %id,
+                "Anthropic tool_use block missing name; tool call is unroutable"
+            );
+            String::new()
+        }
+    };
+    (id, name)
+}
+
 /// State for a single content block being assembled from stream events.
 #[derive(Debug)]
 enum AnthropicBlockState {
@@ -483,11 +530,17 @@ impl AnthropicStreamAssembler {
                 if let Some(block) = event.content_block {
                     match block.block_type.as_str() {
                         "tool_use" => {
+                            let (id, name) = resolve_tool_identity(
+                                block.id.as_deref(),
+                                block.name.as_deref(),
+                                Some(event.index),
+                                "content_block_start",
+                            );
                             self.blocks.insert(
                                 event.index,
                                 AnthropicBlockState::ToolUse {
-                                    id: block.id.unwrap_or_default(),
-                                    name: block.name.unwrap_or_default(),
+                                    id,
+                                    name,
                                     arguments_json: String::new(),
                                 },
                             );
@@ -705,6 +758,79 @@ mod tests {
         let messages = build_anthropic_messages(&request);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["role"], "user");
+    }
+
+    #[test]
+    fn test_stream_assembler_synthesizes_id_when_missing() {
+        let mut assembler = AnthropicStreamAssembler::default();
+
+        let events = [
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "name": "search"}
+            }),
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"q\":\"rust\"}"}
+            }),
+            json!({"type": "content_block_stop", "index": 0}),
+        ];
+
+        let mut emitted = Vec::new();
+        for value in events {
+            let event: AnthropicStreamEvent = serde_json::from_value(value).expect("stream event");
+            emitted.extend(assembler.process_event(event));
+        }
+
+        let tool_calls: Vec<_> = emitted
+            .into_iter()
+            .filter_map(|event| match event {
+                Ok(ProviderEvent::ToolCall { call }) => Some(call),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(tool_calls.len(), 1);
+        assert!(
+            tool_calls[0].call_id.starts_with("call_anthropic_"),
+            "expected synthetic id, got {}",
+            tool_calls[0].call_id
+        );
+        assert_eq!(tool_calls[0].tool_name, "search");
+    }
+
+    #[test]
+    fn test_stream_assembler_emits_empty_name_with_warning_when_name_missing() {
+        let mut assembler = AnthropicStreamAssembler::default();
+
+        let events = [
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "call_x"}
+            }),
+            json!({"type": "content_block_stop", "index": 0}),
+        ];
+
+        let mut emitted = Vec::new();
+        for value in events {
+            let event: AnthropicStreamEvent = serde_json::from_value(value).expect("stream event");
+            emitted.extend(assembler.process_event(event));
+        }
+
+        let tool_calls: Vec<_> = emitted
+            .into_iter()
+            .filter_map(|event| match event {
+                Ok(ProviderEvent::ToolCall { call }) => Some(call),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].call_id, "call_x");
+        assert_eq!(tool_calls[0].tool_name, "");
     }
 
     #[test]
