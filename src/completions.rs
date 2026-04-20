@@ -1,7 +1,8 @@
 use crate::{
     error::ProviderResult,
+    http_client::{build_http_client, HttpClientParams},
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
-    profile::{AuthStrategy, ProviderProfile, RuntimeConfig},
+    profile::{ProviderProfile, RuntimeConfig},
     sse::SseParser,
     stream_util::{truncate_for_log, TerminatingStream},
     InferenceRequest, ProviderError,
@@ -14,92 +15,16 @@ use std::collections::BTreeMap;
 use tracing::{debug, trace, warn};
 
 fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> ProviderResult<Client> {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        reqwest::header::HeaderValue::from_static("application/json"),
-    );
-
-    match &profile.auth_strategy {
-        AuthStrategy::BearerToken => {
-            let val =
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", runtime.api_key))
-                    .map_err(|e| {
-                        ProviderError::invalid_request(format!(
-                            "Invalid bearer token value for profile '{}': {}",
-                            profile.slug, e
-                        ))
-                    })?;
-            headers.insert(reqwest::header::AUTHORIZATION, val);
-        }
-        AuthStrategy::ApiKeyHeader { header_name } => {
-            let key =
-                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
-                    ProviderError::invalid_request(format!(
-                        "Invalid header name '{}' for profile '{}': {}",
-                        header_name, profile.slug, e
-                    ))
-                })?;
-            let val = reqwest::header::HeaderValue::from_str(&runtime.api_key).map_err(|e| {
-                ProviderError::invalid_request(format!(
-                    "Invalid API key value for profile '{}': {}",
-                    profile.slug, e
-                ))
-            })?;
-            headers.insert(key, val);
-        }
-        AuthStrategy::Custom {
-            header_name,
-            prefix,
-        } => {
-            let value = match prefix {
-                Some(p) => format!("{} {}", p, runtime.api_key),
-                None => runtime.api_key.clone(),
-            };
-            let key =
-                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
-                    ProviderError::invalid_request(format!(
-                        "Invalid custom header name '{}' for profile '{}': {}",
-                        header_name, profile.slug, e
-                    ))
-                })?;
-            let val = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
-                ProviderError::invalid_request(format!(
-                    "Invalid custom header value for profile '{}': {}",
-                    profile.slug, e
-                ))
-            })?;
-            headers.insert(key, val);
-        }
-    }
-
-    for (key, value) in &profile.default_headers {
-        let hk = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
-            ProviderError::invalid_request(format!(
-                "Invalid default header name '{}' for profile '{}': {}",
-                key, profile.slug, e
-            ))
-        })?;
-        let hv = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
-            ProviderError::invalid_request(format!(
-                "Invalid default header value for '{}' on profile '{}': {}",
-                key, profile.slug, e
-            ))
-        })?;
-        headers.insert(hk, hv);
-    }
-
-    Client::builder()
-        .default_headers(headers)
-        .connect_timeout(runtime.effective_connect_timeout())
-        .read_timeout(runtime.effective_read_timeout())
-        .build()
-        .map_err(|e| {
-            ProviderError::general(format!(
-                "Failed to build HTTP client for profile '{}': {}",
-                profile.slug, e
-            ))
-        })
+    let context = format!("profile '{}'", profile.slug);
+    build_http_client(HttpClientParams {
+        context: &context,
+        api_key: &runtime.api_key,
+        auth_strategy: &profile.auth_strategy,
+        default_headers: &profile.default_headers,
+        extra_headers: &[],
+        connect_timeout: runtime.effective_connect_timeout(),
+        read_timeout: runtime.effective_read_timeout(),
+    })
 }
 
 fn build_chat_messages(request: &InferenceRequest) -> Vec<Value> {

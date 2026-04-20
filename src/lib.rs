@@ -52,6 +52,7 @@ pub mod anthropic;
 pub mod completions;
 pub mod error;
 pub mod generic_provider;
+pub(crate) mod http_client;
 pub mod model;
 pub mod openai;
 pub mod profile;

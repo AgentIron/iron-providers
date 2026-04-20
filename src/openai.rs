@@ -5,6 +5,7 @@
 
 use crate::{
     error::ProviderResult,
+    http_client::{build_http_client, HttpClientParams},
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
     profile::{AuthStrategy, ProviderQuirks},
     stream_util::TerminatingStream,
@@ -128,10 +129,10 @@ impl OpenAiConfig {
 
 /// Build the OpenAI client from config.
 ///
-/// For the default `BearerToken` auth strategy, this uses `async-openai`'s
-/// built-in `OpenAIConfig`. For other strategies (`ApiKeyHeader`, `Custom`),
-/// this builds a custom reqwest client with the appropriate headers and
-/// wraps it with `async-openai`'s client.
+/// Always constructs a custom `reqwest::Client` (via the shared
+/// `build_http_client` helper) so auth, default headers, and timeouts are
+/// applied uniformly across auth strategies, then wraps it with
+/// `async-openai`'s `Client`.
 fn build_client(config: &OpenAiConfig) -> ProviderResult<Client<OpenAIConfig>> {
     let mut openai_config = OpenAIConfig::default().with_api_key(&config.api_key);
 
@@ -144,70 +145,15 @@ fn build_client(config: &OpenAiConfig) -> ProviderResult<Client<OpenAIConfig>> {
         .as_ref()
         .unwrap_or(&AuthStrategy::BearerToken);
 
-    let mut headers = reqwest::header::HeaderMap::new();
-
-    match strategy {
-        AuthStrategy::BearerToken => {
-            let val = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", config.api_key))
-                .map_err(|e| {
-                    ProviderError::invalid_request(format!("Invalid bearer token value: {}", e))
-                })?;
-            headers.insert(reqwest::header::AUTHORIZATION, val);
-        }
-        AuthStrategy::ApiKeyHeader { header_name } => {
-            let key =
-                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
-                    ProviderError::invalid_request(format!(
-                        "Invalid header name '{}': {}",
-                        header_name, e
-                    ))
-                })?;
-            let val = reqwest::header::HeaderValue::from_str(&config.api_key).map_err(|e| {
-                ProviderError::invalid_request(format!("Invalid API key value: {}", e))
-            })?;
-            headers.insert(key, val);
-        }
-        AuthStrategy::Custom {
-            header_name,
-            prefix,
-        } => {
-            let value = match prefix {
-                Some(p) => format!("{} {}", p, config.api_key),
-                None => config.api_key.clone(),
-            };
-            let key =
-                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
-                    ProviderError::invalid_request(format!(
-                        "Invalid custom header name '{}': {}",
-                        header_name, e
-                    ))
-                })?;
-            let val = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
-                ProviderError::invalid_request(format!("Invalid custom header value: {}", e))
-            })?;
-            headers.insert(key, val);
-        }
-    }
-
-    for (key, value) in &config.default_headers {
-        let hk = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
-            ProviderError::invalid_request(format!("Invalid default header name '{}': {}", key, e))
-        })?;
-        let hv = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
-            ProviderError::invalid_request(format!(
-                "Invalid default header value for '{}': {}",
-                key, e
-            ))
-        })?;
-        headers.insert(hk, hv);
-    }
-
-    let http_client = reqwest::Client::builder()
-        .default_headers(headers)
-        .connect_timeout(config.effective_connect_timeout())
-        .read_timeout(config.effective_read_timeout())
-        .build()
-        .map_err(|e| ProviderError::general(format!("Failed to build HTTP client: {}", e)))?;
+    let http_client = build_http_client(HttpClientParams {
+        context: "OpenAI client",
+        api_key: &config.api_key,
+        auth_strategy: strategy,
+        default_headers: &config.default_headers,
+        extra_headers: &[],
+        connect_timeout: config.effective_connect_timeout(),
+        read_timeout: config.effective_read_timeout(),
+    })?;
 
     Ok(Client::with_config(openai_config).with_http_client(http_client))
 }
