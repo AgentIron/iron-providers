@@ -5,15 +5,29 @@ use crate::{
     InferenceRequest, ProviderEvent, ProviderResult,
 };
 use futures::stream::BoxStream;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct GenericProvider {
-    profile: ProviderProfile,
+    profile: Arc<ProviderProfile>,
     runtime: RuntimeConfig,
 }
 
 impl GenericProvider {
     pub fn from_profile(profile: ProviderProfile, runtime: RuntimeConfig) -> ProviderResult<Self> {
+        Ok(Self {
+            profile: Arc::new(profile),
+            runtime,
+        })
+    }
+
+    /// Construct from an already-shared `Arc<ProviderProfile>`, avoiding an
+    /// extra clone of the profile data when the caller (typically the
+    /// registry) already holds a shared reference.
+    pub(crate) fn from_arc(
+        profile: Arc<ProviderProfile>,
+        runtime: RuntimeConfig,
+    ) -> ProviderResult<Self> {
         Ok(Self { profile, runtime })
     }
 
@@ -66,14 +80,14 @@ impl Provider for GenericProvider {
                 Box::pin(async move { crate::openai::infer(&config, request).await })
             }
             ApiFamily::OpenAiChatCompletions => {
-                let profile = self.profile.clone();
+                let profile = Arc::clone(&self.profile);
                 let runtime = self.runtime.clone();
                 Box::pin(
                     async move { crate::completions::infer(&profile, &runtime, request).await },
                 )
             }
             ApiFamily::AnthropicMessages => {
-                let profile = self.profile.clone();
+                let profile = Arc::clone(&self.profile);
                 let runtime = self.runtime.clone();
                 Box::pin(async move { crate::anthropic::infer(&profile, &runtime, request).await })
             }
@@ -90,14 +104,14 @@ impl Provider for GenericProvider {
                 Box::pin(async move { crate::openai::infer_stream(&config, request).await })
             }
             ApiFamily::OpenAiChatCompletions => {
-                let profile = self.profile.clone();
+                let profile = Arc::clone(&self.profile);
                 let runtime = self.runtime.clone();
                 Box::pin(async move {
                     crate::completions::infer_stream(&profile, &runtime, request).await
                 })
             }
             ApiFamily::AnthropicMessages => {
-                let profile = self.profile.clone();
+                let profile = Arc::clone(&self.profile);
                 let runtime = self.runtime.clone();
                 Box::pin(async move {
                     crate::anthropic::infer_stream(&profile, &runtime, request).await

@@ -4,10 +4,11 @@ use crate::{
     ProviderError, ProviderResult,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct ProviderRegistry {
-    profiles: HashMap<String, ProviderProfile>,
-    url_patterns: Vec<(String, ProviderProfile)>,
+    profiles: HashMap<String, Arc<ProviderProfile>>,
+    url_patterns: Vec<(String, Arc<ProviderProfile>)>,
 }
 
 impl ProviderRegistry {
@@ -20,7 +21,7 @@ impl ProviderRegistry {
 
     pub fn register(&mut self, profile: ProviderProfile) {
         let key = profile.slug.to_lowercase();
-        self.profiles.insert(key, profile);
+        self.profiles.insert(key, Arc::new(profile));
     }
 
     pub fn register_by_url_pattern(
@@ -29,7 +30,8 @@ impl ProviderRegistry {
         profile: ProviderProfile,
     ) {
         let key = profile.slug.to_lowercase();
-        self.profiles.insert(key, profile.clone());
+        let profile = Arc::new(profile);
+        self.profiles.insert(key, Arc::clone(&profile));
         self.url_patterns.push((url_prefix.into(), profile));
     }
 
@@ -39,39 +41,41 @@ impl ProviderRegistry {
         runtime_config: RuntimeConfig,
     ) -> ProviderResult<Box<dyn Provider>> {
         let key = provider_name.to_lowercase();
-        let profile = self
-            .profiles
-            .get(&key)
-            .ok_or_else(|| {
-                let available: Vec<&str> = self.profiles.keys().map(|s| s.as_str()).collect();
-                ProviderError::general(format!(
-                    "Unknown provider '{}'. Available: {:?}",
-                    provider_name, available
-                ))
-            })?
-            .clone();
+        let profile = self.profiles.get(&key).ok_or_else(|| {
+            let available: Vec<&str> = self.profiles.keys().map(|s| s.as_str()).collect();
+            ProviderError::general(format!(
+                "Unknown provider '{}'. Available: {:?}",
+                provider_name, available
+            ))
+        })?;
 
-        crate::generic_provider::GenericProvider::from_profile(profile, runtime_config)
+        crate::generic_provider::GenericProvider::from_arc(Arc::clone(profile), runtime_config)
             .map(|p| Box::new(p) as Box<dyn Provider>)
     }
 
+    /// Resolve a registered profile by matching the URL against registered
+    /// prefixes. When multiple prefixes match, the longest wins so that more
+    /// specific routes take precedence over generic ones (e.g. a
+    /// `https://api.example.com/v1/coding` prefix is preferred over
+    /// `https://api.example.com/v1`).
     pub fn resolve_by_url(&self, url: &str) -> Option<&ProviderProfile> {
-        for (prefix, profile) in &self.url_patterns {
-            if url.starts_with(prefix) {
-                if let Some(p) = self.profiles.get(&profile.slug.to_lowercase()) {
-                    return Some(p);
-                }
-            }
-        }
-        None
+        self.url_patterns
+            .iter()
+            .filter(|(prefix, _)| url.starts_with(prefix))
+            .max_by_key(|(prefix, _)| prefix.len())
+            .and_then(|(_, profile)| self.profiles.get(&profile.slug.to_lowercase()))
+            .map(|arc| arc.as_ref())
     }
 
     pub fn resolve_by_models_dev_id(&self, models_dev_id: &str) -> Option<&ProviderProfile> {
-        self.profiles.values().find(|profile| {
-            profile
-                .models_dev_slug()
-                .eq_ignore_ascii_case(models_dev_id)
-        })
+        self.profiles
+            .values()
+            .find(|profile| {
+                profile
+                    .models_dev_slug()
+                    .eq_ignore_ascii_case(models_dev_id)
+            })
+            .map(|arc| arc.as_ref())
     }
 
     pub fn slugs(&self) -> Vec<&str> {
@@ -281,6 +285,35 @@ mod tests {
         let result = registry.resolve_by_url("https://api.openai.com/v1/chat/completions");
         assert!(result.is_some());
         assert_eq!(result.unwrap().slug, "openai");
+    }
+
+    #[test]
+    fn test_url_pattern_resolution_prefers_longest_prefix() {
+        let mut registry = ProviderRegistry::new();
+        // Register generic prefix first, specific second — longest-prefix match
+        // must still select the specific one regardless of insertion order.
+        registry.register_by_url_pattern(
+            "https://api.example.com/v1",
+            ProviderProfile::new(
+                "general",
+                ApiFamily::OpenAiChatCompletions,
+                "https://api.example.com/v1",
+            ),
+        );
+        registry.register_by_url_pattern(
+            "https://api.example.com/v1/coding",
+            ProviderProfile::new(
+                "coding",
+                ApiFamily::OpenAiChatCompletions,
+                "https://api.example.com/v1/coding",
+            ),
+        );
+
+        let coding = registry.resolve_by_url("https://api.example.com/v1/coding/chat/completions");
+        assert_eq!(coding.map(|p| p.slug.as_str()), Some("coding"));
+
+        let general = registry.resolve_by_url("https://api.example.com/v1/chat/completions");
+        assert_eq!(general.map(|p| p.slug.as_str()), Some("general"));
     }
 
     #[test]

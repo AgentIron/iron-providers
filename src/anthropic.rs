@@ -35,8 +35,6 @@ struct AnthropicRequest {
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContentBlock>,
-    #[allow(dead_code)]
-    stop_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,8 +65,6 @@ struct AnthropicDelta {
     delta_type: Option<String>,
     text: Option<String>,
     partial_json: Option<String>,
-    #[allow(dead_code)]
-    stop_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -542,7 +538,7 @@ fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
     };
 
     match status.as_u16() {
-        401 => ProviderError::auth(message),
+        401 | 403 => ProviderError::auth(message),
         429 => ProviderError::rate_limit(message, None),
         400 => ProviderError::invalid_request(message),
         404 => ProviderError::model(message),

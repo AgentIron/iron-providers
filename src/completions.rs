@@ -643,23 +643,27 @@ fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
     };
 
     let code_str = code.as_deref().unwrap_or("");
-    if status.as_u16() == 401
+    let status_code = status.as_u16();
+
+    if status_code == 401
+        || status_code == 403
         || code_str.contains("invalid_api_key")
         || code_str.contains("authentication")
         || message.to_lowercase().contains("unauthorized")
     {
         ProviderError::auth(message)
-    } else if status.as_u16() == 429
+    } else if status_code == 429
         || code_str.contains("rate_limit")
         || code_str.contains("rateLimit")
+        || code_str.contains("insufficient_quota")
     {
         ProviderError::rate_limit(message, None)
-    } else if status.as_u16() == 400
+    } else if status_code == 400
         || code_str.contains("invalid_request")
         || code_str.contains("invalid_request_error")
     {
         ProviderError::invalid_request(message)
-    } else if status.as_u16() == 404 || code_str.contains("model") {
+    } else if status_code == 404 || code_str.contains("model") {
         ProviderError::model(message)
     } else {
         ProviderError::general(message)
