@@ -58,6 +58,7 @@ pub mod profile;
 pub mod provider;
 pub mod registry;
 pub mod sse;
+pub(crate) mod stream_util;
 
 #[cfg(test)]
 mod mock_provider_tests;

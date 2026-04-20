@@ -3,6 +3,7 @@ use crate::{
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
     profile::{AuthStrategy, ProviderProfile, RuntimeConfig},
     sse::SseParser,
+    stream_util::TerminatingStream,
     InferenceRequest, ProviderError,
 };
 use futures::stream::{BoxStream, StreamExt};
@@ -376,7 +377,7 @@ pub async fn infer_stream(
         return Err(handle_error(status, &text));
     }
 
-    let stream = process_sse_stream(response).boxed();
+    let stream = TerminatingStream::new(process_sse_stream(response)).boxed();
 
     Ok(stream)
 }

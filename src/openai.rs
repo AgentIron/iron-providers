@@ -7,6 +7,7 @@ use crate::{
     error::ProviderResult,
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
     profile::{AuthStrategy, ProviderQuirks},
+    stream_util::TerminatingStream,
     InferenceRequest, ProviderError,
 };
 use async_openai::{
@@ -531,41 +532,22 @@ pub async fn infer_stream(
         .await
         .map_err(handle_error)?;
 
-    // Transform the stream - emits only complete tool calls.
-    // Track whether the stream terminated successfully to decide
-    // whether to append Complete.
-    let stream = stream.map(|event| match event {
-        Ok(event) => {
-            let events = process_stream_event(event);
-            Ok(futures::stream::iter(events.into_iter().map(Ok)))
-        }
-        Err(e) => Err(handle_error(e)),
+    // Expand each upstream item into zero or more provider events,
+    // surfacing upstream errors as typed `ProviderError`s.
+    let events = stream.flat_map(|event| match event {
+        Ok(event) => futures::stream::iter(
+            process_stream_event(event)
+                .into_iter()
+                .map(Ok)
+                .collect::<Vec<_>>(),
+        )
+        .boxed(),
+        Err(e) => futures::stream::iter(vec![Err(handle_error(e))]).boxed(),
     });
 
-    // Flatten the stream of streams, tracking terminal state
-    let flattened: BoxStream<'static, ProviderResult<ProviderEvent>> = stream
-        .flat_map(|result| match result {
-            Ok(stream) => stream.boxed(),
-            Err(e) => futures::stream::iter(vec![Err(e)]).boxed(),
-        })
-        .boxed();
-
-    // Only emit Complete if the stream did not end with an error or
-    // a ResponseFailed event. We detect this by scanning for terminal
-    // signals: if the last meaningful event was an Error or the stream
-    // produced an Err, we do NOT append Complete.
-    //
-    // The approach: collect the stream, check terminal state, then
-    // re-emit. This is necessary because we cannot conditionally chain
-    // a stream combinator based on stream content.
-    let stream_with_terminal = flattened.flat_map(|result| {
-        // Pass through all events; the terminal logic is handled by
-        // process_stream_event which emits Complete on ResponseCompleted
-        // and Error on ResponseFailed.
-        futures::stream::iter(vec![result])
-    });
-
-    Ok(stream_with_terminal.boxed())
+    // Fuse the stream at the first terminal event so `Complete` can never
+    // follow an `Error` and no events leak past stream termination.
+    Ok(TerminatingStream::new(events).boxed())
 }
 
 #[cfg(test)]
