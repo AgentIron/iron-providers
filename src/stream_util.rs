@@ -2,10 +2,14 @@
 
 use crate::error::ProviderResult;
 use crate::model::ProviderEvent;
+use crate::ProviderError;
 use futures::stream::Stream;
+use futures::StreamExt;
 use pin_project::pin_project;
+use serde::de::DeserializeOwned;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tracing::warn;
 
 /// Truncate a streaming payload to a bounded length for safe logging.
 ///
@@ -21,6 +25,77 @@ pub(crate) fn truncate_for_log(s: &str) -> String {
         }
         format!("{}…", &s[..end])
     }
+}
+
+/// Adapter trait for processing SSE events from a provider stream.
+///
+/// Each provider family implements this to deserialize its specific event
+/// format and maintain its own assembly state.
+pub(crate) trait SseStreamAdapter: Default {
+    /// The provider-specific event type to deserialize from SSE data payloads.
+    type Event: DeserializeOwned;
+
+    /// A short label for log messages (e.g. `"Chat Completions"` or `"Anthropic"`).
+    const LABEL: &'static str;
+
+    /// Process a deserialized event and return zero or more provider events.
+    fn process_event(&mut self, event: Self::Event) -> Vec<ProviderResult<ProviderEvent>>;
+
+    /// Handle the `[DONE]` SSE sentinel. The default implementation does
+    /// nothing. Chat Completions overrides this to flush pending tool calls
+    /// and emit `Complete`.
+    fn handle_done(&mut self) -> Vec<ProviderResult<ProviderEvent>> {
+        vec![Ok(ProviderEvent::Complete)]
+    }
+}
+
+/// Generic SSE stream processor that handles byte fragmentation, SSE framing,
+/// deserialization, and error propagation uniformly across provider families.
+pub(crate) fn process_sse_stream<A: SseStreamAdapter>(
+    response: reqwest::Response,
+) -> impl futures::Stream<Item = ProviderResult<ProviderEvent>> {
+    let byte_stream = response.bytes_stream();
+
+    let mut sse_parser = crate::sse::SseParser::new();
+    let mut adapter = A::default();
+
+    byte_stream.flat_map(move |chunk_result| {
+        let mut events: Vec<ProviderResult<ProviderEvent>> = Vec::new();
+
+        match chunk_result {
+            Ok(ref bytes) => {
+                let sse_events = sse_parser.feed(bytes);
+
+                for sse_event in sse_events {
+                    if sse_event.data == "[DONE]" {
+                        let done_events = adapter.handle_done();
+                        events.extend(done_events);
+                        continue;
+                    }
+
+                    match serde_json::from_str::<A::Event>(&sse_event.data) {
+                        Ok(event) => {
+                            let new_events = adapter.process_event(event);
+                            events.extend(new_events);
+                        }
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                payload = %truncate_for_log(&sse_event.data),
+                                "Failed to parse {} stream event, skipping",
+                                A::LABEL
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                events.push(Err(ProviderError::transport(e.to_string())));
+            }
+        }
+
+        futures::stream::iter(events)
+    })
 }
 
 /// Fuses a provider event stream at the first terminal event.
@@ -122,7 +197,7 @@ mod tests {
                 content: "hi".into(),
             }),
             Ok(ProviderEvent::Error {
-                message: "boom".into(),
+                source: crate::ProviderError::general("boom"),
             }),
             Ok(ProviderEvent::Complete),
         ];

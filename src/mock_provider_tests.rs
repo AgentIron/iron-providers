@@ -1,5 +1,6 @@
 use crate::{
     anthropic, completions,
+    http_client::{build_http_client, HttpClientParams},
     profile::{ApiFamily, AuthStrategy, ProviderProfile, RuntimeConfig},
     InferenceRequest, Message, ProviderEvent, ProviderRegistry, Transcript,
 };
@@ -15,6 +16,24 @@ fn anthropic_profile(slug: &str, base_url: &str) -> ProviderProfile {
             header_name: "x-api-key".into(),
         },
     )
+}
+
+/// Build a `reqwest::Client` for use in tests, applying profile auth and
+/// runtime timeouts.
+fn build_test_client(
+    profile: &ProviderProfile,
+    runtime: &RuntimeConfig,
+) -> crate::ProviderResult<reqwest::Client> {
+    let context = format!("test profile '{}'", profile.slug);
+    build_http_client(HttpClientParams {
+        context: &context,
+        api_key: &runtime.api_key,
+        auth_strategy: &profile.auth_strategy,
+        default_headers: &profile.default_headers,
+        extra_headers: &[],
+        connect_timeout: runtime.effective_connect_timeout(),
+        read_timeout: runtime.effective_read_timeout(),
+    })
 }
 
 fn chat_completion_response(text: &str) -> String {
@@ -78,7 +97,8 @@ async fn test_completions_basic_response() {
         Transcript::with_messages(vec![Message::user("hi")]),
     );
 
-    let result = completions::infer(&profile, &runtime, request).await;
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let result = completions::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -111,7 +131,8 @@ async fn test_completions_tool_call_response() {
         Transcript::with_messages(vec![Message::user("search for rust async")]),
     );
 
-    let result = completions::infer(&profile, &runtime, request).await;
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let result = completions::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -140,7 +161,8 @@ async fn test_anthropic_basic_response() {
         Transcript::with_messages(vec![Message::user("hi")]),
     );
 
-    let result = anthropic::infer(&profile, &runtime, request).await;
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let result = anthropic::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -199,7 +221,8 @@ async fn test_completions_error_handling() {
         Transcript::with_messages(vec![Message::user("hi")]),
     );
 
-    let result = completions::infer(&profile, &runtime, request).await;
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let result = completions::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_err());
@@ -225,7 +248,8 @@ async fn test_anthropic_error_handling() {
         Transcript::with_messages(vec![Message::user("hi")]),
     );
 
-    let result = anthropic::infer(&profile, &runtime, request).await;
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let result = anthropic::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_err());
@@ -256,7 +280,8 @@ async fn test_completions_stream() {
         Transcript::with_messages(vec![Message::user("hi")]),
     );
 
-    let stream = completions::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -301,7 +326,8 @@ async fn test_anthropic_stream() {
         Transcript::with_messages(vec![Message::user("hi")]),
     );
 
-    let stream = anthropic::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = anthropic::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -352,7 +378,8 @@ async fn test_completions_stream_tool_call_spans_multiple_chunks() {
         Transcript::with_messages(vec![Message::user("What's the weather in San Francisco?")]),
     );
 
-    let stream = completions::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -414,7 +441,8 @@ async fn test_completions_stream_multiple_tool_calls_not_merged() {
         Transcript::with_messages(vec![Message::user("Search for rust and calculate 1+1")]),
     );
 
-    let stream = completions::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -473,7 +501,8 @@ async fn test_completions_stream_interleaved_text_and_tool_calls() {
         Transcript::with_messages(vec![Message::user("Search for test")]),
     );
 
-    let stream = completions::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -555,7 +584,8 @@ async fn test_completions_stream_tool_calls_before_complete() {
         Transcript::with_messages(vec![Message::user("Do two things")]),
     );
 
-    let stream = completions::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -613,7 +643,8 @@ async fn test_completions_stream_done_flushes_pending() {
         Transcript::with_messages(vec![Message::user("Test")]),
     );
 
-    let stream = completions::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -678,7 +709,8 @@ async fn test_completions_stream_delayed_metadata() {
         Transcript::with_messages(vec![Message::user("Test")]),
     );
 
-    let stream = completions::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -724,7 +756,8 @@ async fn test_completions_stream_missing_metadata_best_effort() {
         Transcript::with_messages(vec![Message::user("Test")]),
     );
 
-    let stream = completions::infer_stream(&profile, &runtime, request)
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -745,4 +778,211 @@ async fn test_completions_stream_missing_metadata_best_effort() {
     assert_eq!(tool_calls[0].tool_name, "");
     // Arguments should still be valid
     assert_eq!(tool_calls[0].arguments["x"], 1);
+}
+
+// ============================================================================
+// Negative streaming tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_completions_stream_invalid_json_skipped() {
+    let mut server = mockito::Server::new_async().await;
+
+    // First event is invalid JSON, second is valid, then [DONE]
+    let sse_body = "data: {not valid json}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n\
+                    data: [DONE]\n\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("hi")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    // Should still get the valid output and Complete despite the invalid chunk
+    let outputs: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::Output { content }) => Some(content.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(outputs.join(""), "ok");
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Ok(ProviderEvent::Complete))));
+}
+
+#[tokio::test]
+async fn test_completions_stream_empty_done() {
+    let mut server = mockito::Server::new_async().await;
+
+    // Stream with only [DONE] — no content
+    let sse_body = "data: [DONE]\n\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("hi")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    // Should have exactly one event: Complete
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0], Ok(ProviderEvent::Complete)));
+}
+
+#[tokio::test]
+async fn test_anthropic_stream_invalid_json_skipped() {
+    let mut server = mockito::Server::new_async().await;
+
+    let sse_body = "data: {bad json}\n\n\
+                    event: content_block_delta\n\
+                    data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n\
+                    event: message_stop\n\
+                    data: {\"type\":\"message_stop\"}\n\n";
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = anthropic_profile("minimax", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "minimax-model",
+        Transcript::with_messages(vec![Message::user("hi")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = anthropic::infer_stream(client, &profile, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    let outputs: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::Output { content }) => Some(content.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(outputs.join(""), "hi");
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Ok(ProviderEvent::Complete))));
+}
+
+// ============================================================================
+// ChoiceRequest end-to-end test
+// ============================================================================
+
+#[tokio::test]
+async fn test_completions_choice_request_tool_call() {
+    let mut server = mockito::Server::new_async().await;
+
+    let choice_args = serde_json::to_string(&json!({
+        "prompt": "Pick a color",
+        "selection_mode": "single",
+        "items": [{"id": "red", "label": "Red"}, {"id": "blue", "label": "Blue"}]
+    }))
+    .unwrap();
+
+    let sse_body = format!(
+        "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"call_choice\",\"function\":{{\"name\":\"runtime.request_choice\",\"arguments\":\"{}\"}}}}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n",
+        choice_args.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("pick a color")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    // Should emit ChoiceRequest, not ToolCall
+    let choice_requests: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ChoiceRequest { request }) => Some(request.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(choice_requests.len(), 1);
+    assert_eq!(choice_requests[0].prompt, "Pick a color");
+    assert_eq!(choice_requests[0].items.len(), 2);
+
+    // Should NOT emit a ToolCall for this
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { .. }) => Some(true),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        tool_calls.is_empty(),
+        "Should not emit ToolCall for choice requests"
+    );
+
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Ok(ProviderEvent::Complete))));
 }

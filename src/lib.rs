@@ -58,7 +58,7 @@ pub mod openai;
 pub mod profile;
 pub mod provider;
 pub mod registry;
-pub mod sse;
+pub(crate) mod sse;
 pub(crate) mod stream_util;
 
 #[cfg(test)]
@@ -68,8 +68,8 @@ pub use error::{ProviderError, ProviderResult};
 pub use generic_provider::GenericProvider;
 pub use model::{
     ChoiceItem, ChoiceRequest, ChoiceSelectionMode, GenerationConfig, InferenceContext,
-    InferenceRequest, Message, ProviderEvent, RuntimeRecord, ToolCall, ToolChoice, ToolDefinition,
-    ToolPolicy, Transcript, CHOICE_REQUEST_TOOL_NAME,
+    InferenceRequest, Message, ProviderEvent, RuntimeRecord, ToolCall, ToolDefinition, ToolPolicy,
+    Transcript, CHOICE_REQUEST_TOOL_NAME,
 };
 pub use profile::{
     ApiFamily, AuthStrategy, EndpointPurpose, ProviderProfile, ProviderQuirks, RuntimeConfig,
@@ -78,15 +78,14 @@ pub use profile::{
 pub use provider::{OpenAiProvider, Provider, ProviderFuture};
 pub use registry::ProviderRegistry;
 
-pub use openai::{infer, infer_stream, OpenAiConfig, OpenAiConfigSource};
+pub use openai::{OpenAiConfig, OpenAiConfigSource};
 
 pub mod prelude {
     pub use crate::{
-        infer, infer_stream, ApiFamily, AuthStrategy, ChoiceItem, ChoiceRequest,
-        ChoiceSelectionMode, EndpointPurpose, GenerationConfig, GenericProvider, InferenceContext,
-        InferenceRequest, Message, OpenAiConfig, OpenAiConfigSource, OpenAiProvider, Provider,
-        ProviderError, ProviderEvent, ProviderProfile, ProviderRegistry, ProviderResult,
-        RuntimeConfig, RuntimeConfigSource, RuntimeRecord, ToolCall, ToolChoice, ToolDefinition,
-        ToolPolicy, Transcript, CHOICE_REQUEST_TOOL_NAME,
+        ApiFamily, AuthStrategy, ChoiceItem, ChoiceRequest, ChoiceSelectionMode, EndpointPurpose,
+        GenerationConfig, GenericProvider, InferenceContext, InferenceRequest, Message,
+        OpenAiConfig, OpenAiConfigSource, OpenAiProvider, Provider, ProviderError, ProviderEvent,
+        ProviderProfile, ProviderRegistry, ProviderResult, RuntimeConfig, RuntimeConfigSource,
+        RuntimeRecord, ToolCall, ToolDefinition, ToolPolicy, Transcript, CHOICE_REQUEST_TOOL_NAME,
     };
 }

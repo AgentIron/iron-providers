@@ -3,13 +3,14 @@
 //! Structured errors for common failure classes including authentication,
 //! transport, rate limiting, and malformed responses.
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Result type alias for provider operations
 pub type ProviderResult<T> = Result<T, ProviderError>;
 
 /// Structured provider errors
-#[derive(Error, Debug, Clone, PartialEq)]
+#[derive(Error, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProviderError {
     /// Authentication failure (invalid or missing API key)
     #[error("Authentication failed: {message}")]

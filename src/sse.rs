@@ -54,7 +54,7 @@ impl SseParser {
                 .trim_end_matches('\r')
                 .trim()
                 .to_string();
-            self.buffer = self.buffer[line_end + 1..].to_string();
+            self.buffer.drain(..=line_end);
 
             if line.is_empty() {
                 // Blank line = event boundary
@@ -92,7 +92,8 @@ impl SseParser {
     ///
     /// Call this when the stream ends to emit any event that wasn't
     /// terminated by a blank line.
-    pub fn flush(&mut self) -> Option<SseEvent> {
+    #[allow(dead_code)]
+    pub(crate) fn flush(&mut self) -> Option<SseEvent> {
         if self.current_data_lines.is_empty() {
             return None;
         }

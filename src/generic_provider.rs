@@ -1,24 +1,36 @@
+use crate::http_client::{build_http_client, HttpClientParams};
 use crate::provider::{Provider, ProviderFuture};
 use crate::{
     openai::OpenAiConfig,
     profile::{ApiFamily, ProviderProfile, RuntimeConfig, RuntimeConfigSource},
     InferenceRequest, ProviderEvent, ProviderResult,
 };
+use async_openai::{config::OpenAIConfig, Client as OpenAiClient};
 use futures::stream::BoxStream;
 use std::sync::Arc;
 
+/// Profile-driven provider that dispatches to the correct adapter based on
+/// [`ApiFamily`].
+///
+/// HTTP clients are built once at construction time and reused across all
+/// inference calls so that TCP connections, TLS sessions, and HTTP/2
+/// multiplexing are shared.
 #[derive(Debug, Clone)]
 pub struct GenericProvider {
     profile: Arc<ProviderProfile>,
     runtime: RuntimeConfig,
+    /// Shared `reqwest::Client` used by Chat Completions and Anthropic
+    /// adapters. Also used as the HTTP transport for the OpenAI Responses
+    /// adapter (via `async_openai`).
+    http_client: reqwest::Client,
+    /// Pre-built `async-openai` client for the OpenAI Responses adapter.
+    /// `None` when the profile family is not `OpenAiResponses`.
+    openai_client: Option<OpenAiClient<OpenAIConfig>>,
 }
 
 impl GenericProvider {
     pub fn from_profile(profile: ProviderProfile, runtime: RuntimeConfig) -> ProviderResult<Self> {
-        Ok(Self {
-            profile: Arc::new(profile),
-            runtime,
-        })
+        Self::build(Arc::new(profile), runtime)
     }
 
     /// Construct from an already-shared `Arc<ProviderProfile>`, avoiding an
@@ -28,7 +40,7 @@ impl GenericProvider {
         profile: Arc<ProviderProfile>,
         runtime: RuntimeConfig,
     ) -> ProviderResult<Self> {
-        Ok(Self { profile, runtime })
+        Self::build(profile, runtime)
     }
 
     /// Create a `GenericProvider` from a caller-owned config source.
@@ -43,6 +55,39 @@ impl GenericProvider {
         Self::from_profile(profile, runtime)
     }
 
+    /// Shared construction logic that builds the HTTP client(s) once.
+    fn build(profile: Arc<ProviderProfile>, runtime: RuntimeConfig) -> ProviderResult<Self> {
+        let context = format!("profile '{}'", profile.slug);
+
+        let http_client = build_http_client(HttpClientParams {
+            context: &context,
+            api_key: &runtime.api_key,
+            auth_strategy: &profile.auth_strategy,
+            default_headers: &profile.default_headers,
+            extra_headers: &[],
+            connect_timeout: runtime.effective_connect_timeout(),
+            read_timeout: runtime.effective_read_timeout(),
+        })?;
+
+        let openai_client = if profile.family == ApiFamily::OpenAiResponses {
+            let config = Self::build_openai_config(&profile, &runtime);
+            let mut openai_config = OpenAIConfig::default().with_api_key(&config.api_key);
+            if let Some(ref base_url) = config.base_url {
+                openai_config = openai_config.with_api_base(base_url);
+            }
+            Some(OpenAiClient::with_config(openai_config).with_http_client(http_client.clone()))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            profile,
+            runtime,
+            http_client,
+            openai_client,
+        })
+    }
+
     pub fn profile(&self) -> &ProviderProfile {
         &self.profile
     }
@@ -51,20 +96,20 @@ impl GenericProvider {
         &self.runtime
     }
 
-    fn build_openai_config(&self) -> OpenAiConfig {
-        let mut config = OpenAiConfig::new(self.runtime.api_key.clone())
-            .with_base_url(self.profile.base_url.clone())
-            .with_auth_strategy(self.profile.auth_strategy.clone())
-            .with_quirks(self.profile.quirks.clone());
+    fn build_openai_config(profile: &ProviderProfile, runtime: &RuntimeConfig) -> OpenAiConfig {
+        let mut config = OpenAiConfig::new(runtime.api_key.clone())
+            .with_base_url(profile.base_url.clone())
+            .with_auth_strategy(profile.auth_strategy.clone())
+            .with_quirks(profile.quirks.clone());
 
-        if let Some(timeout) = self.runtime.connect_timeout {
+        if let Some(timeout) = runtime.connect_timeout {
             config = config.with_connect_timeout(timeout);
         }
-        if let Some(timeout) = self.runtime.read_timeout {
+        if let Some(timeout) = runtime.read_timeout {
             config = config.with_read_timeout(timeout);
         }
 
-        for (key, value) in &self.profile.default_headers {
+        for (key, value) in &profile.default_headers {
             config = config.with_header(key.clone(), value.clone());
         }
 
@@ -76,20 +121,24 @@ impl Provider for GenericProvider {
     fn infer(&self, request: InferenceRequest) -> ProviderFuture<'_, Vec<ProviderEvent>> {
         match self.profile.family {
             ApiFamily::OpenAiResponses => {
-                let config = self.build_openai_config();
-                Box::pin(async move { crate::openai::infer(&config, request).await })
+                let client = self
+                    .openai_client
+                    .as_ref()
+                    .expect("openai_client must be Some when family is OpenAiResponses");
+                // async_openai::Client is cheaply Clone (Arc internally) but
+                // we borrow here since the future borrows &self.
+                let client = client.clone();
+                Box::pin(async move { crate::openai::infer(&client, request).await })
             }
             ApiFamily::OpenAiChatCompletions => {
+                let client = self.http_client.clone();
                 let profile = Arc::clone(&self.profile);
-                let runtime = self.runtime.clone();
-                Box::pin(
-                    async move { crate::completions::infer(&profile, &runtime, request).await },
-                )
+                Box::pin(async move { crate::completions::infer(client, &profile, request).await })
             }
             ApiFamily::AnthropicMessages => {
+                let client = self.http_client.clone();
                 let profile = Arc::clone(&self.profile);
-                let runtime = self.runtime.clone();
-                Box::pin(async move { crate::anthropic::infer(&profile, &runtime, request).await })
+                Box::pin(async move { crate::anthropic::infer(client, &profile, request).await })
             }
         }
     }
@@ -100,22 +149,26 @@ impl Provider for GenericProvider {
     ) -> ProviderFuture<'_, BoxStream<'static, ProviderResult<ProviderEvent>>> {
         match self.profile.family {
             ApiFamily::OpenAiResponses => {
-                let config = self.build_openai_config();
-                Box::pin(async move { crate::openai::infer_stream(&config, request).await })
+                let client = self
+                    .openai_client
+                    .as_ref()
+                    .expect("openai_client must be Some when family is OpenAiResponses");
+                let client = client.clone();
+                Box::pin(async move { crate::openai::infer_stream(&client, request).await })
             }
             ApiFamily::OpenAiChatCompletions => {
+                let client = self.http_client.clone();
                 let profile = Arc::clone(&self.profile);
-                let runtime = self.runtime.clone();
                 Box::pin(async move {
-                    crate::completions::infer_stream(&profile, &runtime, request).await
+                    crate::completions::infer_stream(client, &profile, request).await
                 })
             }
             ApiFamily::AnthropicMessages => {
+                let client = self.http_client.clone();
                 let profile = Arc::clone(&self.profile);
-                let runtime = self.runtime.clone();
-                Box::pin(async move {
-                    crate::anthropic::infer_stream(&profile, &runtime, request).await
-                })
+                Box::pin(
+                    async move { crate::anthropic::infer_stream(client, &profile, request).await },
+                )
             }
         }
     }

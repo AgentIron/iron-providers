@@ -170,31 +170,6 @@ pub enum ToolPolicy {
     Specific(String),
 }
 
-/// Tool choice for the model
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolChoice {
-    /// Do not permit tool use.
-    None,
-    /// Let the model decide whether to call a tool.
-    Auto,
-    /// Force some tool usage, without specifying which one.
-    Required,
-    /// Force a specific tool by name.
-    Specific { name: String },
-}
-
-impl From<&ToolPolicy> for ToolChoice {
-    fn from(policy: &ToolPolicy) -> Self {
-        match policy {
-            ToolPolicy::None => Self::None,
-            ToolPolicy::Auto => Self::Auto,
-            ToolPolicy::Required => Self::Required,
-            ToolPolicy::Specific(name) => Self::Specific { name: name.clone() },
-        }
-    }
-}
-
 /// Normalized generation configuration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GenerationConfig {
@@ -289,9 +264,13 @@ pub enum ProviderEvent {
     Complete,
     /// Error occurred during streaming.
     ///
+    /// Carries a structured [`ProviderError`](crate::ProviderError) so
+    /// downstream consumers can programmatically classify the failure
+    /// (authentication, rate-limit, transport, etc.).
+    ///
     /// If this represents an unrecoverable error, the stream ends
     /// without a subsequent `Complete` event.
-    Error { message: String },
+    Error { source: crate::ProviderError },
 }
 
 /// A runtime-owned record that is **not** model-visible.
@@ -385,6 +364,18 @@ impl InferenceRequest {
             tool_policy: ToolPolicy::default(),
             generation: GenerationConfig::default(),
         }
+    }
+
+    /// Validate that the model identifier is present and non-empty.
+    ///
+    /// Called by all provider adapters before constructing a request.
+    pub fn validate_model(&self) -> crate::ProviderResult<()> {
+        if self.model.trim().is_empty() {
+            return Err(crate::ProviderError::invalid_request(
+                "InferenceRequest.model must be a non-empty model identifier",
+            ));
+        }
+        Ok(())
     }
 
     /// Set top-level instructions for the request.

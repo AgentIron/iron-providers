@@ -2,7 +2,8 @@
 
 use iron_providers::{
     model::{ProviderEvent, ToolCall},
-    GenerationConfig, InferenceRequest, Message, ToolDefinition, ToolPolicy, Transcript,
+    GenerationConfig, InferenceRequest, Message, ProviderError, ToolDefinition, ToolPolicy,
+    Transcript,
 };
 use serde_json::json;
 
@@ -41,10 +42,12 @@ fn test_provider_event_complete() {
 #[test]
 fn test_provider_event_error() {
     let event = ProviderEvent::Error {
-        message: "Something went wrong".to_string(),
+        source: ProviderError::general("Something went wrong"),
     };
     match event {
-        ProviderEvent::Error { message } => assert_eq!(message, "Something went wrong"),
+        ProviderEvent::Error { source } => {
+            assert_eq!(source.to_string(), "Provider error: Something went wrong")
+        }
         _ => panic!("Expected Error event"),
     }
 }

@@ -133,7 +133,10 @@ impl OpenAiConfig {
 /// `build_http_client` helper) so auth, default headers, and timeouts are
 /// applied uniformly across auth strategies, then wraps it with
 /// `async-openai`'s `Client`.
-fn build_client(config: &OpenAiConfig) -> ProviderResult<Client<OpenAIConfig>> {
+///
+/// `pub(crate)` so `OpenAiProvider` can build the client once at
+/// construction time.
+pub(crate) fn build_client(config: &OpenAiConfig) -> ProviderResult<Client<OpenAIConfig>> {
     let mut openai_config = OpenAIConfig::default().with_api_key(&config.api_key);
 
     if let Some(ref base_url) = config.base_url {
@@ -252,15 +255,6 @@ pub(crate) fn build_tool_choice(request: &InferenceRequest) -> Option<ToolChoice
     }
 }
 
-fn validate_model(request: &InferenceRequest) -> ProviderResult<()> {
-    if request.model.trim().is_empty() {
-        return Err(ProviderError::invalid_request(
-            "InferenceRequest.model must be a non-empty model identifier",
-        ));
-    }
-    Ok(())
-}
-
 /// Handle OpenAI errors
 fn handle_error(err: async_openai::error::OpenAIError) -> ProviderError {
     use async_openai::error::OpenAIError;
@@ -309,7 +303,10 @@ fn response_to_events(response: Response) -> ProviderResult<Vec<ProviderEvent>> 
                         }
                         OutputMessageContent::Refusal(refusal) => {
                             events.push(ProviderEvent::Error {
-                                message: format!("Model refusal: {}", refusal.refusal),
+                                source: ProviderError::general(format!(
+                                    "Model refusal: {}",
+                                    refusal.refusal
+                                )),
                             });
                         }
                     }
@@ -356,11 +353,10 @@ fn response_to_events(response: Response) -> ProviderResult<Vec<ProviderEvent>> 
 
 /// Perform non-streaming inference using OpenAI Responses API
 pub async fn infer(
-    config: &OpenAiConfig,
+    client: &Client<OpenAIConfig>,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
-    validate_model(&request)?;
-    let client = build_client(config)?;
+    request.validate_model()?;
 
     let input_items = build_input_items(&request);
     let tools = build_tools(&request);
@@ -406,7 +402,10 @@ pub(crate) fn process_stream_event(event: ResponseStreamEvent) -> Vec<ProviderEv
                         OutputMessageContent::OutputText(_) => {}
                         OutputMessageContent::Refusal(refusal) => {
                             events.push(ProviderEvent::Error {
-                                message: format!("Model refusal: {}", refusal.refusal),
+                                source: ProviderError::general(format!(
+                                    "Model refusal: {}",
+                                    refusal.refusal
+                                )),
                             });
                         }
                     }
@@ -419,10 +418,10 @@ pub(crate) fn process_stream_event(event: ResponseStreamEvent) -> Vec<ProviderEv
                     match ChoiceRequest::from_value(arguments) {
                         Ok(request) => events.push(ProviderEvent::ChoiceRequest { request }),
                         Err(error) => events.push(ProviderEvent::Error {
-                            message: format!(
+                            source: ProviderError::malformed(format!(
                                 "Invalid choice request payload from provider tool call: {}",
                                 error
-                            ),
+                            )),
                         }),
                     }
                 } else {
@@ -447,7 +446,7 @@ pub(crate) fn process_stream_event(event: ResponseStreamEvent) -> Vec<ProviderEv
         ResponseStreamEvent::ResponseFailed(failed) => {
             if let Some(error) = failed.response.error {
                 events.push(ProviderEvent::Error {
-                    message: error.message,
+                    source: ProviderError::general(error.message),
                 });
             }
         }
@@ -470,11 +469,10 @@ pub(crate) fn process_stream_event(event: ResponseStreamEvent) -> Vec<ProviderEv
 /// Returns a stream of provider events. Tool calls are emitted only when complete
 /// (via ResponseOutputItemDone), not as partial chunks.
 pub async fn infer_stream(
-    config: &OpenAiConfig,
+    client: &Client<OpenAIConfig>,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
-    validate_model(&request)?;
-    let client = build_client(config)?;
+    request.validate_model()?;
 
     let input_items = build_input_items(&request);
     let tools = build_tools(&request);
@@ -618,8 +616,9 @@ mod tests {
     async fn infer_rejects_empty_model() {
         use crate::{OpenAiConfig, ProviderError};
         let config = OpenAiConfig::new("test-key".to_string());
+        let client = super::build_client(&config).unwrap();
         let request = InferenceRequest::new("", Transcript::new());
-        let error = super::infer(&config, request).await.unwrap_err();
+        let error = super::infer(&client, request).await.unwrap_err();
         assert!(matches!(error, ProviderError::InvalidRequest { .. }));
         assert!(error.to_string().contains("model must be a non-empty"));
     }
@@ -645,7 +644,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(
             events[0],
-            crate::ProviderEvent::Error { ref message } if message == "boom"
+            crate::ProviderEvent::Error { ref source } if source.to_string().contains("boom")
         ));
         assert!(!events
             .iter()

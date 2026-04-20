@@ -1,10 +1,8 @@
 use crate::{
     error::ProviderResult,
-    http_client::{build_http_client, HttpClientParams},
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
-    profile::{ProviderProfile, RuntimeConfig},
-    sse::SseParser,
-    stream_util::{truncate_for_log, TerminatingStream},
+    profile::ProviderProfile,
+    stream_util::TerminatingStream,
     InferenceRequest, ProviderError,
 };
 use futures::stream::{BoxStream, StreamExt};
@@ -14,9 +12,13 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tracing::{debug, trace, warn};
 
-fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> ProviderResult<Client> {
+#[cfg(test)]
+fn build_client(
+    profile: &ProviderProfile,
+    runtime: &crate::profile::RuntimeConfig,
+) -> ProviderResult<Client> {
     let context = format!("profile '{}'", profile.slug);
-    build_http_client(HttpClientParams {
+    crate::http_client::build_http_client(crate::http_client::HttpClientParams {
         context: &context,
         api_key: &runtime.api_key,
         auth_strategy: &profile.auth_strategy,
@@ -370,10 +372,10 @@ fn response_to_events(response: ChatCompletionResponse) -> Vec<ProviderEvent> {
                     match ChoiceRequest::from_value(arguments) {
                         Ok(request) => events.push(ProviderEvent::ChoiceRequest { request }),
                         Err(error) => events.push(ProviderEvent::Error {
-                            message: format!(
+                            source: ProviderError::malformed(format!(
                                 "Invalid choice request payload from provider tool call: {}",
                                 error
-                            ),
+                            )),
                         }),
                     }
                 } else {
@@ -389,20 +391,17 @@ fn response_to_events(response: ChatCompletionResponse) -> Vec<ProviderEvent> {
     events
 }
 
-pub async fn infer(
-    profile: &ProviderProfile,
-    runtime: &RuntimeConfig,
-    request: InferenceRequest,
-) -> ProviderResult<Vec<ProviderEvent>> {
-    validate_model(&request)?;
-    let client = build_client(profile, runtime)?;
-    let messages = build_chat_messages(&request);
-    let tools = build_chat_tools(&request);
-    let tool_choice = map_tool_choice(&request);
+fn build_request_body(request: &InferenceRequest, stream: bool) -> serde_json::Map<String, Value> {
+    let messages = build_chat_messages(request);
+    let tools = build_chat_tools(request);
+    let tool_choice = map_tool_choice(request);
 
     let mut body = serde_json::Map::new();
     body.insert("model".into(), json!(request.model));
     body.insert("messages".into(), json!(messages));
+    if stream {
+        body.insert("stream".into(), json!(true));
+    }
     if let Some(tools) = tools {
         body.insert("tools".into(), json!(tools));
     }
@@ -421,6 +420,16 @@ pub async fn infer(
     if let Some(ref stop) = request.generation.stop {
         body.insert("stop".into(), json!(stop));
     }
+    body
+}
+
+pub async fn infer(
+    client: Client,
+    profile: &ProviderProfile,
+    request: InferenceRequest,
+) -> ProviderResult<Vec<ProviderEvent>> {
+    request.validate_model()?;
+    let body = build_request_body(&request, false);
 
     let url = format!(
         "{}/chat/completions",
@@ -447,38 +456,12 @@ pub async fn infer(
 }
 
 pub async fn infer_stream(
+    client: Client,
     profile: &ProviderProfile,
-    runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
-    validate_model(&request)?;
-    let client = build_client(profile, runtime)?;
-    let messages = build_chat_messages(&request);
-    let tools = build_chat_tools(&request);
-    let tool_choice = map_tool_choice(&request);
-
-    let mut body = serde_json::Map::new();
-    body.insert("model".into(), json!(request.model));
-    body.insert("messages".into(), json!(messages));
-    body.insert("stream".into(), json!(true));
-    if let Some(tools) = tools {
-        body.insert("tools".into(), json!(tools));
-    }
-    if let Some(tool_choice) = tool_choice {
-        body.insert("tool_choice".into(), tool_choice);
-    }
-    if let Some(temp) = request.generation.temperature {
-        body.insert("temperature".into(), json!(temp));
-    }
-    if let Some(max_tokens) = request.generation.max_tokens {
-        body.insert("max_tokens".into(), json!(max_tokens));
-    }
-    if let Some(top_p) = request.generation.top_p {
-        body.insert("top_p".into(), json!(top_p));
-    }
-    if let Some(ref stop) = request.generation.stop {
-        body.insert("stop".into(), json!(stop));
-    }
+    request.validate_model()?;
+    let body = build_request_body(&request, true);
 
     let url = format!(
         "{}/chat/completions",
@@ -497,121 +480,48 @@ pub async fn infer_stream(
         return Err(handle_error(status, &text));
     }
 
-    let stream = TerminatingStream::new(process_sse_stream(response)).boxed();
+    let stream = TerminatingStream::new(crate::stream_util::process_sse_stream::<
+        CompletionsSseAdapter,
+    >(response))
+    .boxed();
     Ok(stream)
 }
 
-fn process_sse_stream(
-    response: reqwest::Response,
-) -> impl futures::Stream<Item = ProviderResult<ProviderEvent>> {
-    let byte_stream = response.bytes_stream();
-
-    let mut sse_parser = SseParser::new();
-    let mut assembler = StreamAssembler::default();
-
-    byte_stream.flat_map(move |chunk_result| {
-        let mut events: Vec<ProviderResult<ProviderEvent>> = Vec::new();
-
-        match chunk_result {
-            Ok(bytes) => {
-                let sse_events = sse_parser.feed(&bytes);
-
-                for sse_event in sse_events {
-                    if sse_event.data == "[DONE]" {
-                        // Safety flush: finalize any pending tool calls before Complete
-                        if assembler.has_pending() {
-                            debug!("[DONE] received with pending tool calls, performing safety flush");
-                            let tool_calls = assembler.finalize_all();
-                            for tool_call in tool_calls {
-                                if tool_call.tool_name == CHOICE_REQUEST_TOOL_NAME {
-                                    match ChoiceRequest::from_value(tool_call.arguments.clone()) {
-                                        Ok(request) => {
-                                            events.push(Ok(ProviderEvent::ChoiceRequest { request }))
-                                        }
-                                        Err(error) => events.push(Ok(ProviderEvent::Error {
-                                            message: format!(
-                                                "Invalid choice request payload from provider tool call: {}",
-                                                error
-                                            ),
-                                        })),
-                                    }
-                                } else {
-                                    events.push(Ok(ProviderEvent::ToolCall { call: tool_call }));
-                                }
-                            }
-                        }
-                        events.push(Ok(ProviderEvent::Complete));
-                        continue;
-                    }
-
-                    match serde_json::from_str::<ChatCompletionStreamChunk>(&sse_event.data) {
-                        Ok(chunk) => {
-                            let new_events = process_stream_chunk(chunk, &mut assembler);
-                            events.extend(new_events);
-                        }
-                        Err(error) => {
-                            warn!(
-                                error = %error,
-                                payload = %truncate_for_log(&sse_event.data),
-                                "Failed to parse Chat Completions stream chunk, skipping"
-                            );
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                events.push(Err(ProviderError::transport(e.to_string())));
-            }
-        }
-
-        futures::stream::iter(events)
-    })
+/// SSE stream adapter for Chat Completions.
+///
+/// Handles `[DONE]` by flushing pending tool calls and emitting `Complete`.
+#[derive(Default)]
+struct CompletionsSseAdapter {
+    assembler: StreamAssembler,
 }
 
-fn process_stream_chunk(
-    chunk: ChatCompletionStreamChunk,
-    assembler: &mut StreamAssembler,
-) -> Vec<ProviderResult<ProviderEvent>> {
-    let mut events = Vec::new();
+impl crate::stream_util::SseStreamAdapter for CompletionsSseAdapter {
+    type Event = ChatCompletionStreamChunk;
+    const LABEL: &'static str = "Chat Completions";
 
-    for choice in chunk.choices {
-        let choice_index = choice.index;
+    fn process_event(
+        &mut self,
+        chunk: ChatCompletionStreamChunk,
+    ) -> Vec<ProviderResult<ProviderEvent>> {
+        self.assembler.process_chunk(chunk)
+    }
 
-        // Emit text content immediately
-        if let Some(ref content) = choice.delta.content {
-            if !content.is_empty() {
-                events.push(Ok(ProviderEvent::Output {
-                    content: content.clone(),
-                }));
-            }
-        }
+    fn handle_done(&mut self) -> Vec<ProviderResult<ProviderEvent>> {
+        let mut events = Vec::new();
 
-        // Accumulate tool-call deltas
-        if let Some(tool_calls) = choice.delta.tool_calls {
-            for tc in tool_calls {
-                assembler.apply_tool_call_delta(choice_index, tc.index, &tc);
-            }
-        }
-
-        // Check for semantic completion boundary
-        if let Some(ref finish_reason) = choice.finish_reason {
-            debug!(
-                choice_index = choice_index,
-                finish_reason = %finish_reason,
-                "Choice reached completion boundary"
-            );
-
-            // Finalize all pending tool calls for this choice
-            let finalized = assembler.finalize_choice(choice_index);
-            for tool_call in finalized {
+        // Safety flush: finalize any pending tool calls before Complete
+        if self.assembler.has_pending() {
+            debug!("[DONE] received with pending tool calls, performing safety flush");
+            let tool_calls = self.assembler.finalize_all();
+            for tool_call in tool_calls {
                 if tool_call.tool_name == CHOICE_REQUEST_TOOL_NAME {
                     match ChoiceRequest::from_value(tool_call.arguments.clone()) {
                         Ok(request) => events.push(Ok(ProviderEvent::ChoiceRequest { request })),
                         Err(error) => events.push(Ok(ProviderEvent::Error {
-                            message: format!(
+                            source: ProviderError::malformed(format!(
                                 "Invalid choice request payload from provider tool call: {}",
                                 error
-                            ),
+                            )),
                         })),
                     }
                 } else {
@@ -619,18 +529,69 @@ fn process_stream_chunk(
                 }
             }
         }
+        events.push(Ok(ProviderEvent::Complete));
+        events
     }
-
-    events
 }
 
-fn validate_model(request: &InferenceRequest) -> ProviderResult<()> {
-    if request.model.trim().is_empty() {
-        return Err(ProviderError::invalid_request(
-            "InferenceRequest.model must be a non-empty model identifier",
-        ));
+impl StreamAssembler {
+    fn process_chunk(
+        &mut self,
+        chunk: ChatCompletionStreamChunk,
+    ) -> Vec<ProviderResult<ProviderEvent>> {
+        let mut events = Vec::new();
+
+        for choice in chunk.choices {
+            let choice_index = choice.index;
+
+            // Emit text content immediately
+            if let Some(ref content) = choice.delta.content {
+                if !content.is_empty() {
+                    events.push(Ok(ProviderEvent::Output {
+                        content: content.clone(),
+                    }));
+                }
+            }
+
+            // Accumulate tool-call deltas
+            if let Some(tool_calls) = choice.delta.tool_calls {
+                for tc in tool_calls {
+                    self.apply_tool_call_delta(choice_index, tc.index, &tc);
+                }
+            }
+
+            // Check for semantic completion boundary
+            if let Some(ref finish_reason) = choice.finish_reason {
+                debug!(
+                    choice_index = choice_index,
+                    finish_reason = %finish_reason,
+                    "Choice reached completion boundary"
+                );
+
+                // Finalize all pending tool calls for this choice
+                let finalized = self.finalize_choice(choice_index);
+                for tool_call in finalized {
+                    if tool_call.tool_name == CHOICE_REQUEST_TOOL_NAME {
+                        match ChoiceRequest::from_value(tool_call.arguments.clone()) {
+                            Ok(request) => {
+                                events.push(Ok(ProviderEvent::ChoiceRequest { request }))
+                            }
+                            Err(error) => events.push(Ok(ProviderEvent::Error {
+                                source: ProviderError::malformed(format!(
+                                    "Invalid choice request payload from provider tool call: {}",
+                                    error
+                                )),
+                            })),
+                        }
+                    } else {
+                        events.push(Ok(ProviderEvent::ToolCall { call: tool_call }));
+                    }
+                }
+            }
+        }
+
+        events
     }
-    Ok(())
 }
 
 fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
@@ -673,7 +634,7 @@ fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Message, RuntimeRecord, ToolPolicy, Transcript};
+    use crate::{Message, RuntimeConfig, RuntimeRecord, ToolPolicy, Transcript};
     use serde_json::json;
 
     #[test]
@@ -789,9 +750,10 @@ mod tests {
             "https://example.com/v1",
         );
         let runtime = RuntimeConfig::new("test-key");
+        let client = build_client(&profile, &runtime).unwrap();
         let request = InferenceRequest::new("", Transcript::new());
 
-        let error = infer(&profile, &runtime, request).await.unwrap_err();
+        let error = infer(client, &profile, request).await.unwrap_err();
         assert!(matches!(error, ProviderError::InvalidRequest { .. }));
         assert!(error.to_string().contains("model must be a non-empty"));
     }

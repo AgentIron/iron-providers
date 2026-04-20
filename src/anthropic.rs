@@ -1,17 +1,25 @@
 use crate::{
     error::ProviderResult,
-    http_client::{build_http_client, HttpClientParams},
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
-    profile::{ProviderProfile, RuntimeConfig},
-    sse::SseParser,
-    stream_util::{truncate_for_log, TerminatingStream},
+    profile::ProviderProfile,
+    stream_util::TerminatingStream,
     InferenceRequest, ProviderError,
 };
 use futures::stream::{BoxStream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::warn;
+
+/// Monotonically increasing counter for generating unique fallback tool call IDs
+/// when Anthropic omits the `id` field and no `block_index` is available.
+static FALLBACK_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Default `max_tokens` for Anthropic requests when the caller does not
+/// specify one. Anthropic requires this field; 4096 is a conservative
+/// default that works across Claude 3.x models.
+const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 4096;
 
 #[derive(Debug, Serialize)]
 struct AnthropicRequest {
@@ -77,9 +85,13 @@ struct AnthropicError {
     error: AnthropicErrorBody,
 }
 
-fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> ProviderResult<Client> {
+#[cfg(test)]
+fn build_client(
+    profile: &ProviderProfile,
+    runtime: &crate::profile::RuntimeConfig,
+) -> ProviderResult<Client> {
     let context = format!("profile '{}'", profile.slug);
-    build_http_client(HttpClientParams {
+    crate::http_client::build_http_client(crate::http_client::HttpClientParams {
         context: &context,
         api_key: &runtime.api_key,
         auth_strategy: &profile.auth_strategy,
@@ -204,10 +216,10 @@ fn response_to_events(response: AnthropicResponse) -> Vec<ProviderEvent> {
                     match ChoiceRequest::from_value(arguments) {
                         Ok(request) => events.push(ProviderEvent::ChoiceRequest { request }),
                         Err(error) => events.push(ProviderEvent::Error {
-                            message: format!(
+                            source: ProviderError::malformed(format!(
                                 "Invalid choice request payload from provider tool call: {}",
                                 error
-                            ),
+                            )),
                         }),
                     }
                 } else {
@@ -224,28 +236,34 @@ fn response_to_events(response: AnthropicResponse) -> Vec<ProviderEvent> {
     events
 }
 
-pub async fn infer(
-    profile: &ProviderProfile,
-    runtime: &RuntimeConfig,
-    request: InferenceRequest,
-) -> ProviderResult<Vec<ProviderEvent>> {
-    validate_model(&request)?;
-    let client = build_client(profile, runtime)?;
-    let messages = build_anthropic_messages(&request);
-    let tools = build_anthropic_tools(&request);
-    let tool_choice = map_tool_choice(&request);
+fn build_anthropic_request(request: &InferenceRequest, stream: bool) -> AnthropicRequest {
+    let messages = build_anthropic_messages(request);
+    let tools = build_anthropic_tools(request);
+    let tool_choice = map_tool_choice(request);
 
-    let body = AnthropicRequest {
-        model: request.model,
+    AnthropicRequest {
+        model: request.model.clone(),
         messages,
-        system: request.instructions,
+        system: request.instructions.clone(),
         tools,
         tool_choice,
-        max_tokens: request.generation.max_tokens.unwrap_or(4096),
+        max_tokens: request
+            .generation
+            .max_tokens
+            .unwrap_or(DEFAULT_ANTHROPIC_MAX_TOKENS),
         temperature: request.generation.temperature,
         top_p: request.generation.top_p,
-        stream: None,
-    };
+        stream: if stream { Some(true) } else { None },
+    }
+}
+
+pub async fn infer(
+    client: Client,
+    profile: &ProviderProfile,
+    request: InferenceRequest,
+) -> ProviderResult<Vec<ProviderEvent>> {
+    request.validate_model()?;
+    let body = build_anthropic_request(&request, false);
 
     let url = format!("{}/v1/messages", profile.base_url.trim_end_matches('/'));
     let response = client
@@ -269,27 +287,12 @@ pub async fn infer(
 }
 
 pub async fn infer_stream(
+    client: Client,
     profile: &ProviderProfile,
-    runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
-    validate_model(&request)?;
-    let client = build_client(profile, runtime)?;
-    let messages = build_anthropic_messages(&request);
-    let tools = build_anthropic_tools(&request);
-    let tool_choice = map_tool_choice(&request);
-
-    let body = AnthropicRequest {
-        model: request.model,
-        messages,
-        system: request.instructions,
-        tools,
-        tool_choice,
-        max_tokens: request.generation.max_tokens.unwrap_or(4096),
-        temperature: request.generation.temperature,
-        top_p: request.generation.top_p,
-        stream: Some(true),
-    };
+    request.validate_model()?;
+    let body = build_anthropic_request(&request, true);
 
     let url = format!("{}/v1/messages", profile.base_url.trim_end_matches('/'));
     let response = client
@@ -305,53 +308,36 @@ pub async fn infer_stream(
         return Err(handle_error(status, &text));
     }
 
-    let stream = TerminatingStream::new(process_sse_stream(response)).boxed();
+    let stream = TerminatingStream::new(crate::stream_util::process_sse_stream::<
+        AnthropicSseAdapter,
+    >(response))
+    .boxed();
 
     Ok(stream)
 }
 
-fn process_sse_stream(
-    response: reqwest::Response,
-) -> impl futures::Stream<Item = ProviderResult<ProviderEvent>> {
-    let byte_stream = response.bytes_stream();
+/// SSE stream adapter for Anthropic Messages.
+///
+/// Anthropic uses `message_stop` events (not `[DONE]`) for completion, so
+/// `handle_done` returns an empty vec (the `[DONE]` sentinel is ignored).
+#[derive(Default)]
+struct AnthropicSseAdapter {
+    assembler: AnthropicStreamAssembler,
+}
 
-    let mut sse_parser = SseParser::new();
-    let mut assembler = AnthropicStreamAssembler::default();
+impl crate::stream_util::SseStreamAdapter for AnthropicSseAdapter {
+    type Event = AnthropicStreamEvent;
+    const LABEL: &'static str = "Anthropic";
 
-    byte_stream.flat_map(move |chunk_result| {
-        let mut events = Vec::new();
+    fn process_event(&mut self, event: AnthropicStreamEvent) -> Vec<ProviderResult<ProviderEvent>> {
+        self.assembler.process_event(event)
+    }
 
-        match chunk_result {
-            Ok(bytes) => {
-                let sse_events = sse_parser.feed(&bytes);
-
-                for sse_event in sse_events {
-                    if sse_event.data == "[DONE]" {
-                        continue;
-                    }
-
-                    match serde_json::from_str::<AnthropicStreamEvent>(&sse_event.data) {
-                        Ok(event) => {
-                            let new_events = assembler.process_event(event);
-                            events.extend(new_events);
-                        }
-                        Err(error) => {
-                            warn!(
-                                error = %error,
-                                payload = %truncate_for_log(&sse_event.data),
-                                "Failed to parse Anthropic stream event, skipping"
-                            );
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                events.push(Err(ProviderError::transport(e.to_string())));
-            }
-        }
-
-        futures::stream::iter(events)
-    })
+    fn handle_done(&mut self) -> Vec<ProviderResult<ProviderEvent>> {
+        // Anthropic uses `message_stop` events for completion, not `[DONE]`.
+        // Just skip the sentinel.
+        vec![]
+    }
 }
 
 /// Resolve a tool call's identity, warning on missing fields and synthesizing
@@ -371,7 +357,10 @@ fn resolve_tool_identity(
         None => {
             let fallback = match block_index {
                 Some(i) => format!("call_anthropic_{}", i),
-                None => format!("call_anthropic_{}", uuid::Uuid::new_v4()),
+                None => {
+                    let seq = FALLBACK_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    format!("call_anthropic_{seq}")
+                }
             };
             warn!(
                 origin = origin,
@@ -487,10 +476,10 @@ impl AnthropicStreamAssembler {
                                         events.push(Ok(ProviderEvent::ChoiceRequest { request }))
                                     }
                                     Err(error) => events.push(Ok(ProviderEvent::Error {
-                                        message: format!(
+                                        source: ProviderError::malformed(format!(
                                             "Invalid choice request payload from provider tool call: {}",
                                             error
-                                        ),
+                                        )),
                                     })),
                                 }
                             } else {
@@ -511,7 +500,9 @@ impl AnthropicStreamAssembler {
             "error" => {
                 if let Some(err) = event.error {
                     let msg = err.message.unwrap_or_else(|| "Unknown error".to_string());
-                    events.push(Ok(ProviderEvent::Error { message: msg }));
+                    events.push(Ok(ProviderEvent::Error {
+                        source: ProviderError::general(msg),
+                    }));
                 }
             }
             _ => {}
@@ -519,15 +510,6 @@ impl AnthropicStreamAssembler {
 
         events
     }
-}
-
-fn validate_model(request: &InferenceRequest) -> ProviderResult<()> {
-    if request.model.trim().is_empty() {
-        return Err(ProviderError::invalid_request(
-            "InferenceRequest.model must be a non-empty model identifier",
-        ));
-    }
-    Ok(())
 }
 
 fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
@@ -549,7 +531,10 @@ fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{profile::AuthStrategy, Message, RuntimeRecord, ToolPolicy, Transcript};
+    use crate::{
+        profile::{AuthStrategy, RuntimeConfig},
+        Message, RuntimeRecord, ToolPolicy, Transcript,
+    };
     use serde_json::json;
 
     #[test]
@@ -657,9 +642,10 @@ mod tests {
             header_name: "x-api-key".into(),
         });
         let runtime = RuntimeConfig::new("test-key");
+        let client = build_client(&profile, &runtime).unwrap();
         let request = InferenceRequest::new("   ", Transcript::new());
 
-        let error = infer(&profile, &runtime, request).await.unwrap_err();
+        let error = infer(client, &profile, request).await.unwrap_err();
         assert!(matches!(error, ProviderError::InvalidRequest { .. }));
         assert!(error.to_string().contains("model must be a non-empty"));
     }

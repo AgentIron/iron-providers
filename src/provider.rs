@@ -1,7 +1,8 @@
 //! Provider traits and concrete provider adapters.
 
-use crate::openai::OpenAiConfigSource;
+use crate::openai::{build_client, OpenAiConfigSource};
 use crate::{openai, InferenceRequest, OpenAiConfig, ProviderEvent, ProviderResult};
+use async_openai::Client as OpenAiClient;
 use futures::stream::BoxStream;
 use std::future::Future;
 use std::pin::Pin;
@@ -22,15 +23,21 @@ pub trait Provider: Send + Sync {
 }
 
 /// OpenAI-backed provider implementation.
+///
+/// The HTTP client is built once at construction time and reused across all
+/// inference calls so that TCP connections and TLS sessions are shared.
 #[derive(Debug, Clone)]
 pub struct OpenAiProvider {
     config: OpenAiConfig,
+    client: OpenAiClient<async_openai::config::OpenAIConfig>,
 }
 
 impl OpenAiProvider {
     /// Create a provider from validated OpenAI configuration.
-    pub fn new(config: OpenAiConfig) -> Self {
-        Self { config }
+    pub fn new(config: OpenAiConfig) -> ProviderResult<Self> {
+        config.validate()?;
+        let client = build_client(&config)?;
+        Ok(Self { config, client })
     }
 
     /// Borrow the OpenAI configuration snapshot used by this provider.
@@ -43,20 +50,21 @@ impl OpenAiProvider {
     /// The source is projected into a validated `OpenAiConfig` snapshot.
     pub fn from_source<S: OpenAiConfigSource>(source: &S) -> ProviderResult<Self> {
         let config = source.to_openai_config()?;
-        config.validate()?;
-        Ok(Self { config })
+        Self::new(config)
     }
 }
 
 impl Provider for OpenAiProvider {
     fn infer(&self, request: InferenceRequest) -> ProviderFuture<'_, Vec<ProviderEvent>> {
-        Box::pin(openai::infer(&self.config, request))
+        let client = self.client.clone();
+        Box::pin(async move { openai::infer(&client, request).await })
     }
 
     fn infer_stream(
         &self,
         request: InferenceRequest,
     ) -> ProviderFuture<'_, BoxStream<'static, ProviderResult<ProviderEvent>>> {
-        Box::pin(openai::infer_stream(&self.config, request))
+        let client = self.client.clone();
+        Box::pin(async move { openai::infer_stream(&client, request).await })
     }
 }

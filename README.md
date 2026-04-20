@@ -6,7 +6,7 @@ Multi-provider inference layer for AgentIron.
 
 ```toml
 [dependencies]
-iron-providers = "0.1.0"
+iron-providers = "0.1"
 ```
 
 Normalizes requests and responses across OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages API families through a profile-driven generic provider and registry.
@@ -192,7 +192,7 @@ Anthropic adapters.
 - `RuntimeConfig` — API key and optional default model for a session.
 - `InferenceRequest` — Normalized request with model, context, tools, and generation config.
 - `InferenceContext` — Separates model-visible `Transcript` from runtime-only `RuntimeRecord` values.
-- `ProviderEvent` — Streamed events: `Output`, `ToolCall`, `Complete`, `Error`, `Status`. `Complete` is success-only.
+- `ProviderEvent` — Streamed events: `Output`, `ToolCall`, `ChoiceRequest`, `Complete`, `Error`, `Status`. `Complete` is success-only. `Error` carries a structured `ProviderError` with classification (auth, rate-limit, transport, etc.).
 - `Transcript` / `Message` — Conversation history in provider-agnostic format.
 - `ToolDefinition` / `ToolPolicy` — Tool schema and usage policy.
 - `GenerationConfig` — Temperature, max tokens, top-p, stop sequences.
