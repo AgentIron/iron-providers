@@ -5,7 +5,8 @@
 
 use crate::{
     error::ProviderResult,
-    model::{ProviderEvent, ToolCall},
+    model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
+    profile::{AuthStrategy, ProviderQuirks},
     InferenceRequest, ProviderError,
 };
 use async_openai::{
@@ -19,6 +20,7 @@ use async_openai::{
 };
 use futures::stream::{BoxStream, StreamExt};
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// Projection trait for caller-owned config types that can produce an `OpenAiConfig`.
 ///
@@ -38,6 +40,13 @@ pub struct OpenAiConfig {
     pub base_url: Option<String>,
     /// Default model name used by callers that do not override it.
     pub default_model: String,
+    /// Auth strategy to use when constructing the HTTP client.
+    /// When `None`, defaults to `BearerToken`.
+    pub auth_strategy: Option<AuthStrategy>,
+    /// Additional default headers to include in every request.
+    pub default_headers: HashMap<String, String>,
+    /// Provider-specific quirks.
+    pub quirks: ProviderQuirks,
 }
 
 impl OpenAiConfig {
@@ -47,6 +56,9 @@ impl OpenAiConfig {
             api_key,
             base_url: None,
             default_model: "gpt-4o".to_string(),
+            auth_strategy: None,
+            default_headers: HashMap::new(),
+            quirks: ProviderQuirks::default(),
         }
     }
 
@@ -62,6 +74,24 @@ impl OpenAiConfig {
         self
     }
 
+    /// Set the auth strategy.
+    pub fn with_auth_strategy(mut self, strategy: AuthStrategy) -> Self {
+        self.auth_strategy = Some(strategy);
+        self
+    }
+
+    /// Add a default header.
+    pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.default_headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Set provider quirks.
+    pub fn with_quirks(mut self, quirks: ProviderQuirks) -> Self {
+        self.quirks = quirks;
+        self
+    }
+
     /// Validate this config, returning an error if the API key is empty.
     pub fn validate(&self) -> ProviderResult<()> {
         if self.api_key.trim().is_empty() {
@@ -73,22 +103,109 @@ impl OpenAiConfig {
     }
 }
 
-/// Build the OpenAI client from config
-fn build_client(config: &OpenAiConfig) -> Client<OpenAIConfig> {
+/// Build the OpenAI client from config.
+///
+/// For the default `BearerToken` auth strategy, this uses `async-openai`'s
+/// built-in `OpenAIConfig`. For other strategies (`ApiKeyHeader`, `Custom`),
+/// this builds a custom reqwest client with the appropriate headers and
+/// wraps it with `async-openai`'s client.
+fn build_client(config: &OpenAiConfig) -> ProviderResult<Client<OpenAIConfig>> {
     let mut openai_config = OpenAIConfig::default().with_api_key(&config.api_key);
 
     if let Some(ref base_url) = config.base_url {
         openai_config = openai_config.with_api_base(base_url);
     }
 
-    Client::with_config(openai_config)
+    let strategy = config
+        .auth_strategy
+        .as_ref()
+        .unwrap_or(&AuthStrategy::BearerToken);
+
+    // If using non-standard auth or custom headers, build a custom reqwest client
+    let needs_custom_client =
+        !matches!(strategy, AuthStrategy::BearerToken) || !config.default_headers.is_empty();
+
+    if needs_custom_client {
+        let mut headers = reqwest::header::HeaderMap::new();
+
+        match strategy {
+            AuthStrategy::BearerToken => {
+                let val =
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {}", config.api_key))
+                        .map_err(|e| {
+                        ProviderError::invalid_request(format!("Invalid bearer token value: {}", e))
+                    })?;
+                headers.insert(reqwest::header::AUTHORIZATION, val);
+            }
+            AuthStrategy::ApiKeyHeader { header_name } => {
+                let key = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(
+                    |e| {
+                        ProviderError::invalid_request(format!(
+                            "Invalid header name '{}': {}",
+                            header_name, e
+                        ))
+                    },
+                )?;
+                let val = reqwest::header::HeaderValue::from_str(&config.api_key).map_err(|e| {
+                    ProviderError::invalid_request(format!("Invalid API key value: {}", e))
+                })?;
+                headers.insert(key, val);
+            }
+            AuthStrategy::Custom {
+                header_name,
+                prefix,
+            } => {
+                let value = match prefix {
+                    Some(p) => format!("{} {}", p, config.api_key),
+                    None => config.api_key.clone(),
+                };
+                let key = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(
+                    |e| {
+                        ProviderError::invalid_request(format!(
+                            "Invalid custom header name '{}': {}",
+                            header_name, e
+                        ))
+                    },
+                )?;
+                let val = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
+                    ProviderError::invalid_request(format!("Invalid custom header value: {}", e))
+                })?;
+                headers.insert(key, val);
+            }
+        }
+
+        for (key, value) in &config.default_headers {
+            let hk = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
+                ProviderError::invalid_request(format!(
+                    "Invalid default header name '{}': {}",
+                    key, e
+                ))
+            })?;
+            let hv = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+                ProviderError::invalid_request(format!(
+                    "Invalid default header value for '{}': {}",
+                    key, e
+                ))
+            })?;
+            headers.insert(hk, hv);
+        }
+
+        let http_client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .map_err(|e| ProviderError::general(format!("Failed to build HTTP client: {}", e)))?;
+
+        Ok(Client::with_config(openai_config).with_http_client(http_client))
+    } else {
+        Ok(Client::with_config(openai_config))
+    }
 }
 
 /// Build input items from our transcript
 pub(crate) fn build_input_items(request: &InferenceRequest) -> Vec<InputItem> {
     let mut items = Vec::new();
 
-    for msg in &request.transcript.messages {
+    for msg in &request.context.transcript.messages {
         match msg {
             crate::Message::User { content } => {
                 items.push(InputItem::EasyMessage(EasyInputMessage {
@@ -237,9 +354,19 @@ fn response_to_events(response: Response) -> ProviderResult<Vec<ProviderEvent>> 
                 let arguments = serde_json::from_str(&func_call.arguments)
                     .unwrap_or_else(|_| Value::String(func_call.arguments.clone()));
 
-                events.push(ProviderEvent::ToolCall {
-                    call: ToolCall::new(func_call.call_id, func_call.name, arguments),
-                });
+                if func_call.name == CHOICE_REQUEST_TOOL_NAME {
+                    let request = ChoiceRequest::from_value(arguments).map_err(|error| {
+                        ProviderError::malformed(format!(
+                            "Invalid choice request payload from provider tool call: {}",
+                            error
+                        ))
+                    })?;
+                    events.push(ProviderEvent::ChoiceRequest { request });
+                } else {
+                    events.push(ProviderEvent::ToolCall {
+                        call: ToolCall::new(func_call.call_id, func_call.name, arguments),
+                    });
+                }
             }
             OutputItem::Reasoning(reasoning) => {
                 // For now, treat reasoning as status updates
@@ -266,7 +393,7 @@ pub async fn infer(
     config: &OpenAiConfig,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
-    let client = build_client(config);
+    let client = build_client(config)?;
 
     let input_items = build_input_items(&request);
     let tools = build_tools(&request);
@@ -321,9 +448,21 @@ pub(crate) fn process_stream_event(event: ResponseStreamEvent) -> Vec<ProviderEv
             OutputItem::FunctionCall(func_call) => {
                 let arguments = serde_json::from_str(&func_call.arguments)
                     .unwrap_or_else(|_| Value::String(func_call.arguments.clone()));
-                events.push(ProviderEvent::ToolCall {
-                    call: ToolCall::new(func_call.call_id, func_call.name, arguments),
-                });
+                if func_call.name == CHOICE_REQUEST_TOOL_NAME {
+                    match ChoiceRequest::from_value(arguments) {
+                        Ok(request) => events.push(ProviderEvent::ChoiceRequest { request }),
+                        Err(error) => events.push(ProviderEvent::Error {
+                            message: format!(
+                                "Invalid choice request payload from provider tool call: {}",
+                                error
+                            ),
+                        }),
+                    }
+                } else {
+                    events.push(ProviderEvent::ToolCall {
+                        call: ToolCall::new(func_call.call_id, func_call.name, arguments),
+                    });
+                }
             }
             OutputItem::Reasoning(reasoning) => {
                 if let Some(summary) = reasoning.summary.first() {
@@ -346,7 +485,10 @@ pub(crate) fn process_stream_event(event: ResponseStreamEvent) -> Vec<ProviderEv
             }
         }
         ResponseStreamEvent::ResponseCompleted(_) => {
-            // Response completed successfully
+            // Response completed successfully — emit Complete.
+            // This is the only place Complete is emitted for streaming,
+            // so a failed response never produces Complete.
+            events.push(ProviderEvent::Complete);
         }
         _ => {
             // Other events we don't need to handle (deltas are aggregated by ResponseOutputItemDone)
@@ -364,7 +506,7 @@ pub async fn infer_stream(
     config: &OpenAiConfig,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
-    let client = build_client(config);
+    let client = build_client(config)?;
 
     let input_items = build_input_items(&request);
     let tools = build_tools(&request);
@@ -389,7 +531,9 @@ pub async fn infer_stream(
         .await
         .map_err(handle_error)?;
 
-    // Transform the stream - emits only complete tool calls
+    // Transform the stream - emits only complete tool calls.
+    // Track whether the stream terminated successfully to decide
+    // whether to append Complete.
     let stream = stream.map(|event| match event {
         Ok(event) => {
             let events = process_stream_event(event);
@@ -398,7 +542,7 @@ pub async fn infer_stream(
         Err(e) => Err(handle_error(e)),
     });
 
-    // Flatten the stream of streams
+    // Flatten the stream of streams, tracking terminal state
     let flattened: BoxStream<'static, ProviderResult<ProviderEvent>> = stream
         .flat_map(|result| match result {
             Ok(stream) => stream.boxed(),
@@ -406,19 +550,31 @@ pub async fn infer_stream(
         })
         .boxed();
 
-    // Add completion event at the end
-    let with_completion =
-        flattened.chain(futures::stream::once(async { Ok(ProviderEvent::Complete) }));
+    // Only emit Complete if the stream did not end with an error or
+    // a ResponseFailed event. We detect this by scanning for terminal
+    // signals: if the last meaningful event was an Error or the stream
+    // produced an Err, we do NOT append Complete.
+    //
+    // The approach: collect the stream, check terminal state, then
+    // re-emit. This is necessary because we cannot conditionally chain
+    // a stream combinator based on stream content.
+    let stream_with_terminal = flattened.flat_map(|result| {
+        // Pass through all events; the terminal logic is handled by
+        // process_stream_event which emits Complete on ResponseCompleted
+        // and Error on ResponseFailed.
+        futures::stream::iter(vec![result])
+    });
 
-    Ok(with_completion.boxed())
+    Ok(stream_with_terminal.boxed())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_input_items, build_tool_choice, build_tools};
-    use crate::{InferenceRequest, Message, ToolDefinition, ToolPolicy, Transcript};
+    use super::{build_input_items, build_tool_choice, build_tools, process_stream_event};
+    use crate::{InferenceRequest, Message, RuntimeRecord, ToolDefinition, ToolPolicy, Transcript};
     use async_openai::types::responses::{
-        EasyInputContent, InputItem, Tool as OpenAiTool, ToolChoiceOptions, ToolChoiceParam,
+        EasyInputContent, InputItem, ResponseStreamEvent, Tool as OpenAiTool, ToolChoiceOptions,
+        ToolChoiceParam,
     };
     use serde_json::json;
 
@@ -487,5 +643,53 @@ mod tests {
             Some(ToolChoiceParam::Function(function)) => assert_eq!(function.name, "lookup"),
             _ => panic!("expected specific tool choice"),
         }
+    }
+
+    #[test]
+    fn request_shaping_does_not_project_runtime_records_into_model_input() {
+        let mut request = InferenceRequest::new(
+            "gpt-4o",
+            Transcript::with_messages(vec![Message::user("hello")]),
+        );
+        request
+            .context
+            .add_record(RuntimeRecord::new("session_state", json!({"secret": true})));
+
+        let items = build_input_items(&request);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            InputItem::EasyMessage(message) => {
+                assert_eq!(message.content, EasyInputContent::Text("hello".to_string()));
+            }
+            _ => panic!("expected easy message"),
+        }
+    }
+
+    #[test]
+    fn response_failed_event_does_not_emit_complete() {
+        let event: ResponseStreamEvent = serde_json::from_value(json!({
+            "type": "response.failed",
+            "sequence_number": 1,
+            "response": {
+                "created_at": 0,
+                "error": {"code": "server_error", "message": "boom"},
+                "id": "resp_123",
+                "model": "gpt-4o",
+                "object": "response",
+                "output": [],
+                "status": "failed"
+            }
+        }))
+        .expect("response.failed event");
+
+        let events = process_stream_event(event);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            crate::ProviderEvent::Error { ref message } if message == "boom"
+        ));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, crate::ProviderEvent::Complete)));
     }
 }

@@ -135,7 +135,6 @@ fn test_inference_request_new() {
     let transcript = Transcript::new();
     let req = InferenceRequest::new("gpt-4", transcript);
     assert_eq!(req.model, "gpt-4");
-    assert!(!req.stream);
     assert!(req.instructions.is_none());
 }
 
@@ -144,10 +143,8 @@ fn test_inference_request_builder() {
     let transcript = Transcript::new();
     let req = InferenceRequest::new("gpt-4", transcript)
         .with_instructions("Be helpful")
-        .with_stream(true)
         .with_tool_policy(ToolPolicy::Required);
 
     assert_eq!(req.instructions, Some("Be helpful".to_string()));
-    assert!(req.stream);
     assert_eq!(req.tool_policy, ToolPolicy::Required);
 }

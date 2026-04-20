@@ -7,6 +7,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Reserved internal tool name used by providers to normalize model-originated
+/// choice requests into first-class `ProviderEvent::ChoiceRequest` events.
+pub const CHOICE_REQUEST_TOOL_NAME: &str = "runtime.request_choice";
+
 /// A transcript of conversation messages
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Transcript {
@@ -79,8 +83,7 @@ impl Message {
         }
     }
 
-    /// Create a tool result message
-    /// Create an assistant tool result message.
+    /// Create a tool result message.
     pub fn tool<S1: Into<String>, S2: Into<String>>(
         call_id: S1,
         tool_name: S2,
@@ -91,6 +94,38 @@ impl Message {
             tool_name: tool_name.into(),
             result,
         }
+    }
+}
+
+/// Selection cardinality for a provider-originated choice request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChoiceSelectionMode {
+    Single,
+    Multiple,
+}
+
+/// One selectable item in a provider-originated choice request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChoiceItem {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// A first-class model-originated choice request surfaced by the provider/runtime layer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChoiceRequest {
+    pub prompt: String,
+    pub selection_mode: ChoiceSelectionMode,
+    pub items: Vec<ChoiceItem>,
+}
+
+impl ChoiceRequest {
+    /// Parse a choice request from a structured JSON value.
+    pub fn from_value(value: Value) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(value)
     }
 }
 
@@ -229,6 +264,13 @@ impl ToolCall {
 }
 
 /// Events emitted by the provider during streaming
+///
+/// ## Stream termination contract
+///
+/// - `Complete` is emitted **only** on successful stream termination.
+/// - If a provider encounters an unrecoverable error, the stream ends
+///   with `Error` and does **not** emit `Complete`.
+/// - `Status` events are informational and do not affect termination.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderEvent {
@@ -238,10 +280,77 @@ pub enum ProviderEvent {
     Output { content: String },
     /// Completed tool call
     ToolCall { call: ToolCall },
-    /// Stream completed successfully
+    /// Structured model-originated choice request.
+    ChoiceRequest { request: ChoiceRequest },
+    /// Stream completed successfully.
+    ///
+    /// This event is emitted exactly once per successful stream and is
+    /// never emitted after an unrecoverable error.
     Complete,
-    /// Error occurred
+    /// Error occurred during streaming.
+    ///
+    /// If this represents an unrecoverable error, the stream ends
+    /// without a subsequent `Complete` event.
     Error { message: String },
+}
+
+/// A runtime-owned record that is **not** model-visible.
+///
+/// Runtime records carry structured context (e.g. resolved interaction
+/// records, session metadata) that should be available to provider
+/// adapters for request assembly but must not be projected into the
+/// model-visible conversation transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeRecord {
+    /// Stable record kind (e.g. "interaction", "session_state").
+    pub kind: String,
+    /// Structured payload.
+    pub payload: Value,
+}
+
+impl RuntimeRecord {
+    /// Create a new runtime record.
+    pub fn new<S: Into<String>>(kind: S, payload: Value) -> Self {
+        Self {
+            kind: kind.into(),
+            payload,
+        }
+    }
+}
+
+/// Inference context separating model-visible conversation from runtime-only state.
+///
+/// Provider adapters receive the full context but must only project the
+/// `transcript` into model-visible request fields. Runtime records may
+/// influence request assembly (e.g. system instructions, metadata headers)
+/// through explicit provider-specific mapping logic.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct InferenceContext {
+    /// Model-visible conversation transcript.
+    pub transcript: Transcript,
+    /// Runtime-only records that are not replayed into model context.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_records: Vec<RuntimeRecord>,
+}
+
+impl InferenceContext {
+    /// Create an empty context.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a context with only a transcript (no runtime records).
+    pub fn from_transcript(transcript: Transcript) -> Self {
+        Self {
+            transcript,
+            runtime_records: vec![],
+        }
+    }
+
+    /// Add a runtime record.
+    pub fn add_record(&mut self, record: RuntimeRecord) {
+        self.runtime_records.push(record);
+    }
 }
 
 /// Semantic inference request
@@ -252,8 +361,8 @@ pub struct InferenceRequest {
     /// Optional top-level instructions (system prompt)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
-    /// Full conversation transcript
-    pub transcript: Transcript,
+    /// Inference context containing model-visible transcript and runtime-only records.
+    pub context: InferenceContext,
     /// Available tools
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tools: Vec<ToolDefinition>,
@@ -263,9 +372,6 @@ pub struct InferenceRequest {
     /// Generation settings
     #[serde(default)]
     pub generation: GenerationConfig,
-    /// Whether to stream responses
-    #[serde(default)]
-    pub stream: bool,
 }
 
 impl InferenceRequest {
@@ -274,11 +380,10 @@ impl InferenceRequest {
         Self {
             model: model.into(),
             instructions: None,
-            transcript,
+            context: InferenceContext::from_transcript(transcript),
             tools: vec![],
             tool_policy: ToolPolicy::default(),
             generation: GenerationConfig::default(),
-            stream: false,
         }
     }
 
@@ -303,12 +408,6 @@ impl InferenceRequest {
     /// Set generation parameters for the request.
     pub fn with_generation(mut self, generation: GenerationConfig) -> Self {
         self.generation = generation;
-        self
-    }
-
-    /// Enable or disable streaming responses.
-    pub fn with_stream(mut self, stream: bool) -> Self {
-        self.stream = stream;
         self
     }
 }

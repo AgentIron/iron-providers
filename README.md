@@ -40,7 +40,9 @@ Providers are grouped into three adapter families:
 ## Registry Usage
 
 ```rust
-use iron_providers::{ProviderRegistry, RuntimeConfig, InferenceRequest, Transcript, Message};
+use iron_providers::{
+    InferenceRequest, Message, ProviderRegistry, RuntimeConfig, Transcript,
+};
 
 // Create a registry with built-in providers
 let registry = ProviderRegistry::default();
@@ -54,6 +56,27 @@ let request = InferenceRequest::new("model-name", Transcript::with_messages(vec!
 ]));
 
 let events = provider.infer(request).await?;
+```
+
+## Request Model
+
+`InferenceRequest` now carries an `InferenceContext`:
+
+- `context.transcript`: model-visible conversation history
+- `context.runtime_records`: runtime-only structured records
+
+Runtime records are **not** projected into assistant-visible message history by
+default. They exist so adapters and runtimes can carry structured state without
+polluting the model transcript.
+
+```rust
+use iron_providers::{InferenceRequest, RuntimeRecord, Transcript};
+use serde_json::json;
+
+let mut request = InferenceRequest::new("model-name", Transcript::new());
+request
+    .context
+    .add_record(RuntimeRecord::new("session_state", json!({"trace_id": "abc123"})));
 ```
 
 ### Custom Providers
@@ -121,12 +144,37 @@ pub trait Provider: Send + Sync {
 
 The `GenericProvider` dispatches to the correct adapter (Responses, Chat Completions, or Anthropic) based on the profile's API family.
 
+## Streaming Contract
+
+Streaming is requested by calling `infer_stream`; non-streaming is requested by
+calling `infer`. There is no `stream` field on `InferenceRequest`.
+
+`ProviderEvent::Complete` has a strict meaning:
+
+- `Complete` means the stream ended successfully.
+- If a provider emits an unrecoverable `Error`, the stream ends without a later
+  `Complete` event.
+
+This contract now holds across OpenAI Responses, Chat Completions, and
+Anthropic adapters.
+
+## Profile Semantics
+
+`ProviderProfile` is authoritative across provider families:
+
+- `base_url` is used for all families
+- `auth_strategy` is honored for all families, including `OpenAiResponses`
+- `default_headers` are validated and applied consistently
+- invalid profile auth/header configuration fails fast during client
+  construction instead of silently falling back to a default client
+
 ## Key Types
 
 - `ProviderProfile` — Slug, optional models.dev ID, API family, base URL, auth strategy, headers, purpose, and quirks.
 - `RuntimeConfig` — API key and optional default model for a session.
-- `InferenceRequest` — Normalized request with model, transcript, tools, and generation config.
-- `ProviderEvent` — Streamed events: `Output`, `ToolCall`, `Complete`, `Error`, `Status`.
+- `InferenceRequest` — Normalized request with model, context, tools, and generation config.
+- `InferenceContext` — Separates model-visible `Transcript` from runtime-only `RuntimeRecord` values.
+- `ProviderEvent` — Streamed events: `Output`, `ToolCall`, `Complete`, `Error`, `Status`. `Complete` is success-only.
 - `Transcript` / `Message` — Conversation history in provider-agnostic format.
 - `ToolDefinition` / `ToolPolicy` — Tool schema and usage policy.
 - `GenerationConfig` — Temperature, max tokens, top-p, stop sequences.
@@ -175,6 +223,30 @@ cargo test -p iron-providers
 ```
 
 Tests include unit tests for message mapping, tool mapping, and error handling, plus mock HTTP integration tests for all built-in provider slugs using `mockito`.
+
+The test suite also includes protocol-level unit coverage for:
+
+- SSE framing with split chunks and multi-line `data:` payloads
+- success vs failure stream termination semantics
+- multiple tool-call assembly for Chat Completions and Anthropic streaming
+- fail-fast invalid profile header handling
+- runtime-record non-leakage into provider-visible transcripts
+
+## Migration Notes
+
+See [`MIGRATION.md`](./MIGRATION.md) for breaking API changes including:
+
+- removal of `InferenceRequest.stream`
+- replacement of transcript-only request state with `InferenceContext`
+- removal of `Message::SystemStructured`
+
+## Dependency Notes
+
+`async-openai` was upgraded to `0.35`.
+
+The planned direct `reqwest` upgrade to `0.13` is currently deferred because
+`async-openai 0.35` still depends on `reqwest 0.12`, which would otherwise
+introduce incompatible `reqwest::Client` types into the dependency graph.
 
 ## License
 

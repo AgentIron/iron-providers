@@ -1,7 +1,8 @@
 use crate::{
     error::ProviderResult,
-    model::{ProviderEvent, ToolCall},
+    model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
     profile::{AuthStrategy, ProviderProfile, RuntimeConfig},
+    sse::SseParser,
     InferenceRequest, ProviderError,
 };
 use futures::stream::{BoxStream, StreamExt};
@@ -11,7 +12,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tracing::{debug, trace, warn};
 
-fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> Client {
+fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> ProviderResult<Client> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -20,18 +21,31 @@ fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> Client {
 
     match &profile.auth_strategy {
         AuthStrategy::BearerToken => {
-            if let Ok(val) =
+            let val =
                 reqwest::header::HeaderValue::from_str(&format!("Bearer {}", runtime.api_key))
-            {
-                headers.insert(reqwest::header::AUTHORIZATION, val);
-            }
+                    .map_err(|e| {
+                        ProviderError::invalid_request(format!(
+                            "Invalid bearer token value for profile '{}': {}",
+                            profile.slug, e
+                        ))
+                    })?;
+            headers.insert(reqwest::header::AUTHORIZATION, val);
         }
         AuthStrategy::ApiKeyHeader { header_name } => {
-            if let Ok(val) = reqwest::header::HeaderValue::from_str(&runtime.api_key) {
-                if let Ok(key) = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()) {
-                    headers.insert(key, val);
-                }
-            }
+            let key =
+                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
+                    ProviderError::invalid_request(format!(
+                        "Invalid header name '{}' for profile '{}': {}",
+                        header_name, profile.slug, e
+                    ))
+                })?;
+            let val = reqwest::header::HeaderValue::from_str(&runtime.api_key).map_err(|e| {
+                ProviderError::invalid_request(format!(
+                    "Invalid API key value for profile '{}': {}",
+                    profile.slug, e
+                ))
+            })?;
+            headers.insert(key, val);
         }
         AuthStrategy::Custom {
             header_name,
@@ -41,27 +55,48 @@ fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> Client {
                 Some(p) => format!("{} {}", p, runtime.api_key),
                 None => runtime.api_key.clone(),
             };
-            if let Ok(val) = reqwest::header::HeaderValue::from_str(&value) {
-                if let Ok(key) = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()) {
-                    headers.insert(key, val);
-                }
-            }
+            let key =
+                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
+                    ProviderError::invalid_request(format!(
+                        "Invalid custom header name '{}' for profile '{}': {}",
+                        header_name, profile.slug, e
+                    ))
+                })?;
+            let val = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
+                ProviderError::invalid_request(format!(
+                    "Invalid custom header value for profile '{}': {}",
+                    profile.slug, e
+                ))
+            })?;
+            headers.insert(key, val);
         }
     }
 
     for (key, value) in &profile.default_headers {
-        if let (Ok(hk), Ok(hv)) = (
-            reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-            reqwest::header::HeaderValue::from_str(value),
-        ) {
-            headers.insert(hk, hv);
-        }
+        let hk = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
+            ProviderError::invalid_request(format!(
+                "Invalid default header name '{}' for profile '{}': {}",
+                key, profile.slug, e
+            ))
+        })?;
+        let hv = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+            ProviderError::invalid_request(format!(
+                "Invalid default header value for '{}' on profile '{}': {}",
+                key, profile.slug, e
+            ))
+        })?;
+        headers.insert(hk, hv);
     }
 
     Client::builder()
         .default_headers(headers)
         .build()
-        .unwrap_or_default()
+        .map_err(|e| {
+            ProviderError::general(format!(
+                "Failed to build HTTP client for profile '{}': {}",
+                profile.slug, e
+            ))
+        })
 }
 
 fn build_chat_messages(request: &InferenceRequest) -> Vec<Value> {
@@ -76,7 +111,7 @@ fn build_chat_messages(request: &InferenceRequest) -> Vec<Value> {
 
     let mut pending_tool_calls: Vec<Value> = Vec::new();
 
-    for msg in &request.transcript.messages {
+    for msg in &request.context.transcript.messages {
         match msg {
             crate::Message::User { content } => {
                 messages.push(json!({
@@ -266,7 +301,12 @@ struct StreamAssembler {
 
 impl StreamAssembler {
     /// Apply a tool-call delta to the accumulator
-    fn apply_tool_call_delta(&mut self, choice_index: u32, tool_index: u32, delta: &StreamToolCall) {
+    fn apply_tool_call_delta(
+        &mut self,
+        choice_index: u32,
+        tool_index: u32,
+        delta: &StreamToolCall,
+    ) {
         let choice = self.choices.entry(choice_index).or_default();
         let tool = choice.tool_calls.entry(tool_index).or_default();
 
@@ -382,12 +422,51 @@ struct ChatErrorBody {
     code: Option<String>,
 }
 
+fn response_to_events(response: ChatCompletionResponse) -> Vec<ProviderEvent> {
+    let mut events = Vec::new();
+
+    for choice in response.choices {
+        if let Some(ref content) = choice.message.content {
+            if !content.is_empty() {
+                events.push(ProviderEvent::Output {
+                    content: content.clone(),
+                });
+            }
+        }
+
+        if let Some(tool_calls) = choice.message.tool_calls {
+            for tc in tool_calls {
+                let arguments = serde_json::from_str(&tc.function.arguments)
+                    .unwrap_or_else(|_| Value::String(tc.function.arguments.clone()));
+                if tc.function.name == CHOICE_REQUEST_TOOL_NAME {
+                    match ChoiceRequest::from_value(arguments) {
+                        Ok(request) => events.push(ProviderEvent::ChoiceRequest { request }),
+                        Err(error) => events.push(ProviderEvent::Error {
+                            message: format!(
+                                "Invalid choice request payload from provider tool call: {}",
+                                error
+                            ),
+                        }),
+                    }
+                } else {
+                    events.push(ProviderEvent::ToolCall {
+                        call: ToolCall::new(tc.id, tc.function.name, arguments),
+                    });
+                }
+            }
+        }
+    }
+
+    events.push(ProviderEvent::Complete);
+    events
+}
+
 pub async fn infer(
     profile: &ProviderProfile,
     runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
-    let client = build_client(profile, runtime);
+    let client = build_client(profile, runtime)?;
     let messages = build_chat_messages(&request);
     let tools = build_chat_tools(&request);
     let tool_choice = map_tool_choice(&request);
@@ -438,39 +517,12 @@ pub async fn infer(
     Ok(response_to_events(result))
 }
 
-fn response_to_events(response: ChatCompletionResponse) -> Vec<ProviderEvent> {
-    let mut events = Vec::new();
-
-    for choice in response.choices {
-        if let Some(ref content) = choice.message.content {
-            if !content.is_empty() {
-                events.push(ProviderEvent::Output {
-                    content: content.clone(),
-                });
-            }
-        }
-
-        if let Some(tool_calls) = choice.message.tool_calls {
-            for tc in tool_calls {
-                let arguments = serde_json::from_str(&tc.function.arguments)
-                    .unwrap_or_else(|_| Value::String(tc.function.arguments.clone()));
-                events.push(ProviderEvent::ToolCall {
-                    call: ToolCall::new(tc.id, tc.function.name, arguments),
-                });
-            }
-        }
-    }
-
-    events.push(ProviderEvent::Complete);
-    events
-}
-
 pub async fn infer_stream(
     profile: &ProviderProfile,
     runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
-    let client = build_client(profile, runtime);
+    let client = build_client(profile, runtime)?;
     let messages = build_chat_messages(&request);
     let tools = build_chat_tools(&request);
     let tool_choice = map_tool_choice(&request);
@@ -524,7 +576,7 @@ fn process_sse_stream(
 ) -> impl futures::Stream<Item = ProviderResult<ProviderEvent>> {
     let byte_stream = response.bytes_stream();
 
-    let mut buffer = String::new();
+    let mut sse_parser = SseParser::new();
     let mut assembler = StreamAssembler::default();
 
     byte_stream.flat_map(move |chunk_result| {
@@ -532,34 +584,41 @@ fn process_sse_stream(
 
         match chunk_result {
             Ok(bytes) => {
-                buffer.push_str(&String::from_utf8_lossy(&bytes));
+                let sse_events = sse_parser.feed(&bytes);
 
-                while let Some(line_end) = buffer.find('\n') {
-                    let line = buffer[..line_end].trim().to_string();
-                    buffer = buffer[line_end + 1..].to_string();
-
-                    if line.is_empty() || line.starts_with(':') {
-                        continue;
-                    }
-
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if data == "[DONE]" {
-                            // Safety flush: finalize any pending tool calls before Complete
-                            if assembler.has_pending() {
-                                debug!("[DONE] received with pending tool calls, performing safety flush");
-                                let tool_calls = assembler.finalize_all();
-                                for tool_call in tool_calls {
+                for sse_event in sse_events {
+                    if sse_event.data == "[DONE]" {
+                        // Safety flush: finalize any pending tool calls before Complete
+                        if assembler.has_pending() {
+                            debug!("[DONE] received with pending tool calls, performing safety flush");
+                            let tool_calls = assembler.finalize_all();
+                            for tool_call in tool_calls {
+                                if tool_call.tool_name == CHOICE_REQUEST_TOOL_NAME {
+                                    match ChoiceRequest::from_value(tool_call.arguments.clone()) {
+                                        Ok(request) => {
+                                            events.push(Ok(ProviderEvent::ChoiceRequest { request }))
+                                        }
+                                        Err(error) => events.push(Ok(ProviderEvent::Error {
+                                            message: format!(
+                                                "Invalid choice request payload from provider tool call: {}",
+                                                error
+                                            ),
+                                        })),
+                                    }
+                                } else {
                                     events.push(Ok(ProviderEvent::ToolCall { call: tool_call }));
                                 }
                             }
-                            events.push(Ok(ProviderEvent::Complete));
-                            continue;
                         }
+                        events.push(Ok(ProviderEvent::Complete));
+                        continue;
+                    }
 
-                        if let Ok(chunk) = serde_json::from_str::<ChatCompletionStreamChunk>(data) {
-                            let new_events = process_stream_chunk(chunk, &mut assembler);
-                            events.extend(new_events);
-                        }
+                    if let Ok(chunk) =
+                        serde_json::from_str::<ChatCompletionStreamChunk>(&sse_event.data)
+                    {
+                        let new_events = process_stream_chunk(chunk, &mut assembler);
+                        events.extend(new_events);
                     }
                 }
             }
@@ -608,7 +667,19 @@ fn process_stream_chunk(
             // Finalize all pending tool calls for this choice
             let finalized = assembler.finalize_choice(choice_index);
             for tool_call in finalized {
-                events.push(Ok(ProviderEvent::ToolCall { call: tool_call }));
+                if tool_call.tool_name == CHOICE_REQUEST_TOOL_NAME {
+                    match ChoiceRequest::from_value(tool_call.arguments.clone()) {
+                        Ok(request) => events.push(Ok(ProviderEvent::ChoiceRequest { request })),
+                        Err(error) => events.push(Ok(ProviderEvent::Error {
+                            message: format!(
+                                "Invalid choice request payload from provider tool call: {}",
+                                error
+                            ),
+                        })),
+                    }
+                } else {
+                    events.push(Ok(ProviderEvent::ToolCall { call: tool_call }));
+                }
             }
         }
     }
@@ -652,7 +723,7 @@ fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Message, ToolPolicy, Transcript};
+    use crate::{Message, RuntimeRecord, ToolPolicy, Transcript};
     use serde_json::json;
 
     #[test]
@@ -744,5 +815,35 @@ mod tests {
             r#"{"error":{"message":"slow down","code":"rate_limit"}}"#,
         );
         assert!(err.is_rate_limit());
+    }
+
+    #[test]
+    fn test_build_client_fails_fast_on_invalid_default_header_name() {
+        let profile = ProviderProfile::new(
+            "broken",
+            crate::ApiFamily::OpenAiChatCompletions,
+            "https://example.com/v1",
+        )
+        .with_header("bad header", "value");
+
+        let error = build_client(&profile, &RuntimeConfig::new("test-key")).unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(error.to_string().contains("Invalid default header name"));
+    }
+
+    #[test]
+    fn test_build_chat_messages_does_not_project_runtime_records() {
+        let mut request = InferenceRequest::new(
+            "gpt-4o",
+            Transcript::with_messages(vec![Message::user("hello")]),
+        );
+        request
+            .context
+            .add_record(RuntimeRecord::new("session_state", json!({"secret": true})));
+
+        let messages = build_chat_messages(&request);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "hello");
     }
 }

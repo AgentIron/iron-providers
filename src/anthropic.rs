@@ -1,7 +1,8 @@
 use crate::{
     error::ProviderResult,
-    model::{ProviderEvent, ToolCall},
+    model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
     profile::{AuthStrategy, ProviderProfile, RuntimeConfig},
+    sse::SseParser,
     InferenceRequest, ProviderError,
 };
 use futures::stream::{BoxStream, StreamExt};
@@ -49,6 +50,9 @@ struct AnthropicContentBlock {
 struct AnthropicStreamEvent {
     #[serde(rename = "type")]
     event_type: String,
+    /// Content block index — identifies which block this event belongs to.
+    #[serde(default)]
+    index: u32,
     delta: Option<AnthropicDelta>,
     content_block: Option<AnthropicContentBlock>,
     error: Option<AnthropicErrorBody>,
@@ -74,7 +78,7 @@ struct AnthropicError {
     error: AnthropicErrorBody,
 }
 
-fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> Client {
+fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> ProviderResult<Client> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -87,18 +91,31 @@ fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> Client {
 
     match &profile.auth_strategy {
         AuthStrategy::BearerToken => {
-            if let Ok(val) =
+            let val =
                 reqwest::header::HeaderValue::from_str(&format!("Bearer {}", runtime.api_key))
-            {
-                headers.insert(reqwest::header::AUTHORIZATION, val);
-            }
+                    .map_err(|e| {
+                        ProviderError::invalid_request(format!(
+                            "Invalid bearer token value for profile '{}': {}",
+                            profile.slug, e
+                        ))
+                    })?;
+            headers.insert(reqwest::header::AUTHORIZATION, val);
         }
         AuthStrategy::ApiKeyHeader { header_name } => {
-            if let Ok(val) = reqwest::header::HeaderValue::from_str(&runtime.api_key) {
-                if let Ok(key) = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()) {
-                    headers.insert(key, val);
-                }
-            }
+            let key =
+                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
+                    ProviderError::invalid_request(format!(
+                        "Invalid header name '{}' for profile '{}': {}",
+                        header_name, profile.slug, e
+                    ))
+                })?;
+            let val = reqwest::header::HeaderValue::from_str(&runtime.api_key).map_err(|e| {
+                ProviderError::invalid_request(format!(
+                    "Invalid API key value for profile '{}': {}",
+                    profile.slug, e
+                ))
+            })?;
+            headers.insert(key, val);
         }
         AuthStrategy::Custom {
             header_name,
@@ -108,34 +125,55 @@ fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> Client {
                 Some(p) => format!("{} {}", p, runtime.api_key),
                 None => runtime.api_key.clone(),
             };
-            if let Ok(val) = reqwest::header::HeaderValue::from_str(&value) {
-                if let Ok(key) = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()) {
-                    headers.insert(key, val);
-                }
-            }
+            let key =
+                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
+                    ProviderError::invalid_request(format!(
+                        "Invalid custom header name '{}' for profile '{}': {}",
+                        header_name, profile.slug, e
+                    ))
+                })?;
+            let val = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
+                ProviderError::invalid_request(format!(
+                    "Invalid custom header value for profile '{}': {}",
+                    profile.slug, e
+                ))
+            })?;
+            headers.insert(key, val);
         }
     }
 
     for (key, value) in &profile.default_headers {
-        if let (Ok(hk), Ok(hv)) = (
-            reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-            reqwest::header::HeaderValue::from_str(value),
-        ) {
-            headers.insert(hk, hv);
-        }
+        let hk = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
+            ProviderError::invalid_request(format!(
+                "Invalid default header name '{}' for profile '{}': {}",
+                key, profile.slug, e
+            ))
+        })?;
+        let hv = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+            ProviderError::invalid_request(format!(
+                "Invalid default header value for '{}' on profile '{}': {}",
+                key, profile.slug, e
+            ))
+        })?;
+        headers.insert(hk, hv);
     }
 
     Client::builder()
         .default_headers(headers)
         .build()
-        .unwrap_or_default()
+        .map_err(|e| {
+            ProviderError::general(format!(
+                "Failed to build HTTP client for profile '{}': {}",
+                profile.slug, e
+            ))
+        })
 }
 
 fn build_anthropic_messages(request: &InferenceRequest) -> Vec<Value> {
     let mut messages = Vec::new();
     let mut pending_tool_calls: Vec<Value> = Vec::new();
 
-    for msg in &request.transcript.messages {
+    for msg in &request.context.transcript.messages {
         match msg {
             crate::Message::User { content } => {
                 messages.push(json!({
@@ -221,12 +259,50 @@ fn map_tool_choice(request: &InferenceRequest) -> Option<Value> {
     }
 }
 
+fn response_to_events(response: AnthropicResponse) -> Vec<ProviderEvent> {
+    let mut events = Vec::new();
+
+    for block in response.content {
+        match block.block_type.as_str() {
+            "text" => {
+                if let Some(text) = block.text {
+                    events.push(ProviderEvent::Output { content: text });
+                }
+            }
+            "tool_use" => {
+                let call_id = block.id.unwrap_or_default();
+                let tool_name = block.name.unwrap_or_default();
+                let arguments = block.input.unwrap_or(Value::Null);
+                if tool_name == CHOICE_REQUEST_TOOL_NAME {
+                    match ChoiceRequest::from_value(arguments) {
+                        Ok(request) => events.push(ProviderEvent::ChoiceRequest { request }),
+                        Err(error) => events.push(ProviderEvent::Error {
+                            message: format!(
+                                "Invalid choice request payload from provider tool call: {}",
+                                error
+                            ),
+                        }),
+                    }
+                } else {
+                    events.push(ProviderEvent::ToolCall {
+                        call: ToolCall::new(call_id, tool_name, arguments),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    events.push(ProviderEvent::Complete);
+    events
+}
+
 pub async fn infer(
     profile: &ProviderProfile,
     runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
-    let client = build_client(profile, runtime);
+    let client = build_client(profile, runtime)?;
     let messages = build_anthropic_messages(&request);
     let tools = build_anthropic_tools(&request);
     let tool_choice = map_tool_choice(&request);
@@ -264,38 +340,12 @@ pub async fn infer(
     Ok(response_to_events(result))
 }
 
-fn response_to_events(response: AnthropicResponse) -> Vec<ProviderEvent> {
-    let mut events = Vec::new();
-
-    for block in response.content {
-        match block.block_type.as_str() {
-            "text" => {
-                if let Some(text) = block.text {
-                    events.push(ProviderEvent::Output { content: text });
-                }
-            }
-            "tool_use" => {
-                let call_id = block.id.unwrap_or_default();
-                let tool_name = block.name.unwrap_or_default();
-                let arguments = block.input.unwrap_or(Value::Null);
-                events.push(ProviderEvent::ToolCall {
-                    call: ToolCall::new(call_id, tool_name, arguments),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    events.push(ProviderEvent::Complete);
-    events
-}
-
 pub async fn infer_stream(
     profile: &ProviderProfile,
     runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
-    let client = build_client(profile, runtime);
+    let client = build_client(profile, runtime)?;
     let messages = build_anthropic_messages(&request);
     let tools = build_anthropic_tools(&request);
     let tool_choice = map_tool_choice(&request);
@@ -336,35 +386,25 @@ fn process_sse_stream(
 ) -> impl futures::Stream<Item = ProviderResult<ProviderEvent>> {
     let byte_stream = response.bytes_stream();
 
-    let mut buffer = String::new();
-    let mut tool_call_accumulator: Option<ToolCallAccumulator> = None;
+    let mut sse_parser = SseParser::new();
+    let mut assembler = AnthropicStreamAssembler::default();
 
     byte_stream.flat_map(move |chunk_result| {
         let mut events = Vec::new();
 
         match chunk_result {
             Ok(bytes) => {
-                buffer.push_str(&String::from_utf8_lossy(&bytes));
+                let sse_events = sse_parser.feed(&bytes);
 
-                while let Some(line_end) = buffer.find('\n') {
-                    let line = buffer[..line_end].trim().to_string();
-                    buffer = buffer[line_end + 1..].to_string();
-
-                    if line.is_empty() || line.starts_with(':') {
+                for sse_event in sse_events {
+                    if sse_event.data == "[DONE]" {
                         continue;
                     }
 
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if data == "[DONE]" {
-                            continue;
-                        }
-
-                        if let Ok(event) = serde_json::from_str::<AnthropicStreamEvent>(data) {
-                            let (mut new_events, new_accum) =
-                                process_stream_event(event, tool_call_accumulator.take());
-                            events.append(&mut new_events);
-                            tool_call_accumulator = new_accum;
-                        }
+                    if let Ok(event) = serde_json::from_str::<AnthropicStreamEvent>(&sse_event.data)
+                    {
+                        let new_events = assembler.process_event(event);
+                        events.extend(new_events);
                     }
                 }
             }
@@ -377,75 +417,122 @@ fn process_sse_stream(
     })
 }
 
-struct ToolCallAccumulator {
-    id: String,
-    name: String,
-    arguments: String,
+/// State for a single content block being assembled from stream events.
+#[derive(Debug)]
+enum AnthropicBlockState {
+    /// Text blocks emit deltas immediately; this variant just tracks that
+    /// a text block is open so `content_block_stop` knows there's nothing
+    /// to finalize.
+    Text,
+    ToolUse {
+        id: String,
+        name: String,
+        arguments_json: String,
+    },
 }
 
-fn process_stream_event(
-    event: AnthropicStreamEvent,
-    accumulator: Option<ToolCallAccumulator>,
-) -> (
-    Vec<ProviderResult<ProviderEvent>>,
-    Option<ToolCallAccumulator>,
-) {
-    let mut events = Vec::new();
-    let mut acc = accumulator;
+/// Per-block assembler that tracks multiple concurrent content blocks
+/// by their index, supporting interleaved text and tool-use blocks.
+#[derive(Debug, Default)]
+struct AnthropicStreamAssembler {
+    blocks: std::collections::BTreeMap<u32, AnthropicBlockState>,
+}
 
-    match event.event_type.as_str() {
-        "content_block_delta" => {
-            if let Some(delta) = event.delta {
-                match delta.delta_type.as_deref() {
-                    Some("text_delta") => {
-                        if let Some(text) = delta.text {
-                            events.push(Ok(ProviderEvent::Output { content: text }));
-                        }
-                    }
-                    Some("input_json_delta") => {
-                        if let Some(partial) = delta.partial_json {
-                            if let Some(ref mut a) = acc {
-                                a.arguments.push_str(&partial);
+impl AnthropicStreamAssembler {
+    fn process_event(&mut self, event: AnthropicStreamEvent) -> Vec<ProviderResult<ProviderEvent>> {
+        let mut events = Vec::new();
+
+        match event.event_type.as_str() {
+            "content_block_delta" => {
+                if let Some(delta) = event.delta {
+                    match delta.delta_type.as_deref() {
+                        Some("text_delta") => {
+                            if let Some(text) = delta.text {
+                                events.push(Ok(ProviderEvent::Output { content: text }));
                             }
                         }
+                        Some("input_json_delta") => {
+                            if let Some(partial) = delta.partial_json {
+                                if let Some(AnthropicBlockState::ToolUse {
+                                    arguments_json, ..
+                                }) = self.blocks.get_mut(&event.index)
+                                {
+                                    arguments_json.push_str(&partial);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
-        }
-        "content_block_start" => {
-            if let Some(block) = event.content_block {
-                if block.block_type == "tool_use" {
-                    acc = Some(ToolCallAccumulator {
-                        id: block.id.unwrap_or_default(),
-                        name: block.name.unwrap_or_default(),
-                        arguments: String::new(),
-                    });
+            "content_block_start" => {
+                if let Some(block) = event.content_block {
+                    match block.block_type.as_str() {
+                        "tool_use" => {
+                            self.blocks.insert(
+                                event.index,
+                                AnthropicBlockState::ToolUse {
+                                    id: block.id.unwrap_or_default(),
+                                    name: block.name.unwrap_or_default(),
+                                    arguments_json: String::new(),
+                                },
+                            );
+                        }
+                        "text" => {
+                            self.blocks.insert(event.index, AnthropicBlockState::Text);
+                        }
+                        _ => {}
+                    }
                 }
             }
-        }
-        "content_block_stop" => {
-            if let Some(a) = acc.take() {
-                let arguments = serde_json::from_str(&a.arguments)
-                    .unwrap_or(Value::String(a.arguments.clone()));
-                events.push(Ok(ProviderEvent::ToolCall {
-                    call: ToolCall::new(a.id, a.name, arguments),
-                }));
+            "content_block_stop" => {
+                if let Some(state) = self.blocks.remove(&event.index) {
+                    match state {
+                        AnthropicBlockState::ToolUse {
+                            id,
+                            name,
+                            arguments_json,
+                        } => {
+                            let arguments = serde_json::from_str(&arguments_json)
+                                .unwrap_or(Value::String(arguments_json.clone()));
+                            if name == CHOICE_REQUEST_TOOL_NAME {
+                                match ChoiceRequest::from_value(arguments) {
+                                    Ok(request) => {
+                                        events.push(Ok(ProviderEvent::ChoiceRequest { request }))
+                                    }
+                                    Err(error) => events.push(Ok(ProviderEvent::Error {
+                                        message: format!(
+                                            "Invalid choice request payload from provider tool call: {}",
+                                            error
+                                        ),
+                                    })),
+                                }
+                            } else {
+                                events.push(Ok(ProviderEvent::ToolCall {
+                                    call: ToolCall::new(id, name, arguments),
+                                }));
+                            }
+                        }
+                        AnthropicBlockState::Text => {
+                            // Text deltas are emitted immediately; nothing to finalize.
+                        }
+                    }
+                }
             }
-        }
-        "message_stop" => {
-            events.push(Ok(ProviderEvent::Complete));
-        }
-        "error" => {
-            if let Some(err) = event.error {
-                let msg = err.message.unwrap_or_else(|| "Unknown error".to_string());
-                events.push(Ok(ProviderEvent::Error { message: msg }));
+            "message_stop" => {
+                events.push(Ok(ProviderEvent::Complete));
             }
+            "error" => {
+                if let Some(err) = event.error {
+                    let msg = err.message.unwrap_or_else(|| "Unknown error".to_string());
+                    events.push(Ok(ProviderEvent::Error { message: msg }));
+                }
+            }
+            _ => {}
         }
-        _ => {}
-    }
 
-    (events, acc)
+        events
+    }
 }
 
 fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
@@ -467,7 +554,7 @@ fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Message, ToolPolicy, Transcript};
+    use crate::{Message, RuntimeRecord, ToolPolicy, Transcript};
     use serde_json::json;
 
     #[test]
@@ -545,5 +632,89 @@ mod tests {
             messages.is_empty(),
             "system prompt should not be in messages"
         );
+    }
+
+    #[test]
+    fn test_build_client_fails_fast_on_invalid_default_header_name() {
+        let profile = ProviderProfile::new(
+            "broken",
+            crate::ApiFamily::AnthropicMessages,
+            "https://example.com",
+        )
+        .with_auth(AuthStrategy::ApiKeyHeader {
+            header_name: "x-api-key".into(),
+        })
+        .with_header("bad header", "value");
+
+        let error = build_client(&profile, &RuntimeConfig::new("test-key")).unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(error.to_string().contains("Invalid default header name"));
+    }
+
+    #[test]
+    fn test_build_anthropic_messages_does_not_project_runtime_records() {
+        let mut request = InferenceRequest::new(
+            "claude-3",
+            Transcript::with_messages(vec![Message::user("hello")]),
+        );
+        request
+            .context
+            .add_record(RuntimeRecord::new("session_state", json!({"secret": true})));
+
+        let messages = build_anthropic_messages(&request);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+    }
+
+    #[test]
+    fn test_stream_assembler_tracks_multiple_tool_blocks_independently() {
+        let mut assembler = AnthropicStreamAssembler::default();
+
+        let events = [
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "call_1", "name": "search"}
+            }),
+            json!({
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "call_2", "name": "calculate"}
+            }),
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"query\":\"rust\"}"}
+            }),
+            json!({
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"expr\":\"1+1\"}"}
+            }),
+            json!({"type": "content_block_stop", "index": 1}),
+            json!({"type": "content_block_stop", "index": 0}),
+        ];
+
+        let mut emitted = Vec::new();
+        for value in events {
+            let event: AnthropicStreamEvent = serde_json::from_value(value).expect("stream event");
+            emitted.extend(assembler.process_event(event));
+        }
+
+        let tool_calls: Vec<_> = emitted
+            .into_iter()
+            .filter_map(|event| match event {
+                Ok(ProviderEvent::ToolCall { call }) => Some(call),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(tool_calls.len(), 2);
+        assert_eq!(tool_calls[0].call_id, "call_2");
+        assert_eq!(tool_calls[0].tool_name, "calculate");
+        assert_eq!(tool_calls[0].arguments["expr"], "1+1");
+        assert_eq!(tool_calls[1].call_id, "call_1");
+        assert_eq!(tool_calls[1].tool_name, "search");
+        assert_eq!(tool_calls[1].arguments["query"], "rust");
     }
 }

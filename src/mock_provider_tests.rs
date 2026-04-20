@@ -83,9 +83,9 @@ async fn test_completions_basic_response() {
 
     assert!(result.is_ok());
     let events = result.unwrap();
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "Hello from completions")));
+    assert!(events.iter().any(
+        |e| matches!(e, ProviderEvent::Output { content } if content == "Hello from completions")
+    ));
 }
 
 #[tokio::test]
@@ -145,9 +145,9 @@ async fn test_anthropic_basic_response() {
 
     assert!(result.is_ok());
     let events = result.unwrap();
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "Hello from anthropic")));
+    assert!(events.iter().any(
+        |e| matches!(e, ProviderEvent::Output { content } if content == "Hello from anthropic")
+    ));
 }
 
 #[tokio::test]
@@ -237,9 +237,9 @@ async fn test_anthropic_error_handling() {
 async fn test_completions_stream() {
     let mut server = mockito::Server::new_async().await;
 
-    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"}}]}\n\
-                    data: [DONE]\n";
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"}}]}\n\n\
+                    data: [DONE]\n\n";
 
     let mock = server
         .mock("POST", "/chat/completions")
@@ -331,11 +331,11 @@ async fn test_completions_stream_tool_call_spans_multiple_chunks() {
     let mut server = mockito::Server::new_async().await;
 
     // Simulate a tool call with arguments arriving across multiple chunks
-    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_123\",\"function\":{\"name\":\"get_weather\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"location\\\": \\\"San\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\" Francisco\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\
-                    data: [DONE]\n";
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_123\",\"function\":{\"name\":\"get_weather\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"location\\\": \\\"San\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\" Francisco\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+                    data: [DONE]\n\n";
 
     let mock = server
         .mock("POST", "/chat/completions")
@@ -371,7 +371,7 @@ async fn test_completions_stream_tool_call_spans_multiple_chunks() {
     assert_eq!(tool_calls.len(), 1, "Should have exactly one tool call");
     assert_eq!(tool_calls[0].call_id, "call_123");
     assert_eq!(tool_calls[0].tool_name, "get_weather");
-    
+
     // Arguments should be valid JSON with the complete location
     let args = &tool_calls[0].arguments;
     assert!(args.is_object(), "Arguments should be valid JSON object");
@@ -392,12 +392,12 @@ async fn test_completions_stream_multiple_tool_calls_not_merged() {
     let mut server = mockito::Server::new_async().await;
 
     // Simulate two tool calls arriving interleaved
-    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"search\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"calculate\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"query\\\": \\\"rust\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"{\\\"expr\\\": \\\"1+1\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}},{\"index\":1,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\
-                    data: [DONE]\n";
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"search\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"calculate\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"query\\\": \\\"rust\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"{\\\"expr\\\": \\\"1+1\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}},{\"index\":1,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+                    data: [DONE]\n\n";
 
     let mock = server
         .mock("POST", "/chat/completions")
@@ -430,12 +430,12 @@ async fn test_completions_stream_multiple_tool_calls_not_merged() {
         .collect();
 
     assert_eq!(tool_calls.len(), 2, "Should have exactly two tool calls");
-    
+
     // Verify fragments were not merged
     assert_eq!(tool_calls[0].call_id, "call_1");
     assert_eq!(tool_calls[0].tool_name, "search");
     assert_eq!(tool_calls[0].arguments["query"], "rust");
-    
+
     assert_eq!(tool_calls[1].call_id, "call_2");
     assert_eq!(tool_calls[1].tool_name, "calculate");
     assert_eq!(tool_calls[1].arguments["expr"], "1+1");
@@ -450,13 +450,13 @@ async fn test_completions_stream_interleaved_text_and_tool_calls() {
     let mut server = mockito::Server::new_async().await;
 
     // Simulate text and tool-call deltas arriving interleaved
-    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"I'll help\"}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"search\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" you search\"}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"q\\\": \\\"test\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" for that.\"}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\
-                    data: [DONE]\n";
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"I'll help\"}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"search\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" you search\"}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"q\\\": \\\"test\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" for that.\"}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+                    data: [DONE]\n\n";
 
     let mock = server
         .mock("POST", "/chat/completions")
@@ -512,7 +512,7 @@ async fn test_completions_stream_interleaved_text_and_tool_calls() {
         .enumerate()
         .filter_map(|(i, e)| matches!(e, Ok(ProviderEvent::Output { .. })).then_some(i))
         .collect();
-    
+
     let tool_call_indices: Vec<usize> = events
         .iter()
         .enumerate()
@@ -522,7 +522,10 @@ async fn test_completions_stream_interleaved_text_and_tool_calls() {
     // All outputs should come before tool call (they arrive interleaved but tool call finalizes later)
     let last_output = output_indices.last().copied().unwrap_or(0);
     let first_tool_call = tool_call_indices.first().copied().unwrap_or(usize::MAX);
-    assert!(last_output < first_tool_call, "All outputs should come before tool call finalization");
+    assert!(
+        last_output < first_tool_call,
+        "All outputs should come before tool call finalization"
+    );
 }
 
 // ============================================================================
@@ -534,8 +537,8 @@ async fn test_completions_stream_tool_calls_before_complete() {
     let mut server = mockito::Server::new_async().await;
 
     // Multiple tool calls with finish_reason in same chunk
-    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"second\",\"arguments\":\"{}\"}},{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"first\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\
-                    data: [DONE]\n";
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"second\",\"arguments\":\"{}\"}},{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"first\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+                    data: [DONE]\n\n";
 
     let mock = server
         .mock("POST", "/chat/completions")
@@ -592,8 +595,8 @@ async fn test_completions_stream_done_flushes_pending() {
     let mut server = mockito::Server::new_async().await;
 
     // Tool call without finish_reason, relying on [DONE] for safety flush
-    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"test\",\"arguments\":\"{\\\"x\\\":1}\"}}]}}]}\n\
-                    data: [DONE]\n";
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"test\",\"arguments\":\"{\\\"x\\\":1}\"}}]}}]}\n\n\
+                    data: [DONE]\n\n";
 
     let mock = server
         .mock("POST", "/chat/completions")
@@ -653,14 +656,11 @@ async fn test_completions_stream_delayed_metadata() {
 
     // Tool call where id and name arrive after arguments start
     // Build SSE body using a simpler approach
-    let chunk1 = r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]}}]}
-"#;
-    let chunk2 = r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_delayed","function":{"name":"delayed_func"}}]}}]}
-"#;
-    let chunk3 = r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\":1}"}}]},"finish_reason":"tool_calls"}]}
-"#;
-    let chunk4 = "data: [DONE]\n";
-    
+    let chunk1 = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\"}}]}}]}\n\n";
+    let chunk2 = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_delayed\",\"function\":{\"name\":\"delayed_func\"}}]}}]}\n\n";
+    let chunk3 = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"x\\\":1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n";
+    let chunk4 = "data: [DONE]\n\n";
+
     let sse_body = format!("{}{}{}{}", chunk1, chunk2, chunk3, chunk4);
 
     let mock = server
@@ -705,9 +705,9 @@ async fn test_completions_stream_missing_metadata_best_effort() {
     let mut server = mockito::Server::new_async().await;
 
     // Tool call that never receives id or name - should still emit with fallbacks
-    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"x\\\":1}\"}}]}}]}\n\
-                    data: {\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\"}]}\n\
-                    data: [DONE]\n";
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"x\\\":1}\"}}]}}]}\n\n\
+                    data: {\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\"}]}\n\n\
+                    data: [DONE]\n\n";
 
     let mock = server
         .mock("POST", "/chat/completions")

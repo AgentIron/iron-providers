@@ -95,6 +95,7 @@ fn test_streaming_request_setup() {
         .with_tool_policy(ToolPolicy::Auto)
         .with_generation(GenerationConfig::new().with_temperature(0.7));
 
-    let stream_request = request.with_stream(true);
-    assert!(stream_request.stream);
+    // Streaming is determined by calling infer_stream vs infer, not by a field.
+    assert_eq!(request.model, "gpt-4o");
+    assert_eq!(request.tools.len(), 1);
 }

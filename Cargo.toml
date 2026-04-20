@@ -19,14 +19,14 @@ exclude = [
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
+thiserror = "2"
 tracing = "0.1"
 futures = "0.3"
 pin-project = "1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # OpenAI SDK - enable features for Responses API
-async-openai = { version = "0.34", features = ["responses", "response-types", "_api"] }
+async-openai = { version = "0.35", features = ["responses", "response-types", "_api"] }
 
 # Async trait support
 async-trait = "0.1"
