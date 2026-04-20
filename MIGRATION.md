@@ -78,7 +78,34 @@ Now:
 - `Complete` means successful termination
 - unrecoverable stream errors end without a later `Complete`
 
-### 5. Profile semantics are stricter
+### 5. `default_model` removed from `OpenAiConfig` and `RuntimeConfig`
+
+The `default_model` field was stored but never consumed during inference —
+adapters always use `InferenceRequest.model`. The field and its
+`with_model` builder are removed from both `OpenAiConfig` and
+`RuntimeConfig` to remove misleading (and previously hardcoded)
+`"gpt-4o"` defaults.
+
+`InferenceRequest.model` is now validated at the adapter boundary and
+must be a non-empty string; passing an empty or whitespace-only model
+identifier returns `ProviderError::InvalidRequest`.
+
+Before:
+
+```rust
+let config = OpenAiConfig::new("key".into()).with_model("gpt-4".into());
+let runtime = RuntimeConfig::new("key").with_model("claude-3-opus");
+```
+
+After:
+
+```rust
+let config = OpenAiConfig::new("key".into());
+let runtime = RuntimeConfig::new("key");
+let request = InferenceRequest::new("gpt-4", transcript);
+```
+
+### 6. Profile semantics are stricter
 
 Provider auth strategy and default headers are now validated and applied more
 consistently, including for `OpenAiResponses`.
@@ -86,7 +113,7 @@ consistently, including for `OpenAiResponses`.
 Misconfigured headers or auth values now fail fast instead of falling back to a
 default client.
 
-### 6. Dependency note
+### 7. Dependency note
 
 `async-openai` was upgraded to `0.35`.
 

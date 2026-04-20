@@ -10,17 +10,14 @@ use serde_json::json;
 fn test_openai_config_new() {
     let config = OpenAiConfig::new("test-key".to_string());
     assert_eq!(config.api_key, "test-key");
-    assert_eq!(config.default_model, "gpt-4o");
     assert!(config.base_url.is_none());
 }
 
 #[test]
 fn test_openai_config_builder() {
     let config = OpenAiConfig::new("test-key".to_string())
-        .with_model("gpt-4".to_string())
         .with_base_url("https://custom.api.com".to_string());
 
-    assert_eq!(config.default_model, "gpt-4");
     assert_eq!(config.base_url, Some("https://custom.api.com".to_string()));
 }
 

@@ -98,20 +98,13 @@ impl ProviderProfile {
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub api_key: String,
-    pub default_model: Option<String>,
 }
 
 impl RuntimeConfig {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
-            default_model: None,
         }
-    }
-
-    pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.default_model = Some(model.into());
-        self
     }
 
     pub fn validate(&self) -> Result<(), ProviderError> {

@@ -38,14 +38,8 @@ impl GenericProvider {
     }
 
     fn build_openai_config(&self) -> OpenAiConfig {
-        let model = self
-            .runtime
-            .default_model
-            .clone()
-            .unwrap_or_else(|| "gpt-4o".to_string());
         let mut config = OpenAiConfig::new(self.runtime.api_key.clone())
             .with_base_url(self.profile.base_url.clone())
-            .with_model(model)
             .with_auth_strategy(self.profile.auth_strategy.clone())
             .with_quirks(self.profile.quirks.clone());
 

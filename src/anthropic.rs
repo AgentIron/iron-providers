@@ -306,6 +306,7 @@ pub async fn infer(
     runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
+    validate_model(&request)?;
     let client = build_client(profile, runtime)?;
     let messages = build_anthropic_messages(&request);
     let tools = build_anthropic_tools(&request);
@@ -349,6 +350,7 @@ pub async fn infer_stream(
     runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
+    validate_model(&request)?;
     let client = build_client(profile, runtime)?;
     let messages = build_anthropic_messages(&request);
     let tools = build_anthropic_tools(&request);
@@ -547,6 +549,15 @@ impl AnthropicStreamAssembler {
     }
 }
 
+fn validate_model(request: &InferenceRequest) -> ProviderResult<()> {
+    if request.model.trim().is_empty() {
+        return Err(ProviderError::invalid_request(
+            "InferenceRequest.model must be a non-empty model identifier",
+        ));
+    }
+    Ok(())
+}
+
 fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
     let message = if let Ok(err) = serde_json::from_str::<AnthropicError>(body) {
         err.error.message.unwrap_or_else(|| body.to_string())
@@ -661,6 +672,24 @@ mod tests {
         let error = build_client(&profile, &RuntimeConfig::new("test-key")).unwrap_err();
         assert!(matches!(error, ProviderError::InvalidRequest { .. }));
         assert!(error.to_string().contains("Invalid default header name"));
+    }
+
+    #[tokio::test]
+    async fn test_infer_rejects_empty_model() {
+        let profile = ProviderProfile::new(
+            "test",
+            crate::ApiFamily::AnthropicMessages,
+            "https://example.com",
+        )
+        .with_auth(AuthStrategy::ApiKeyHeader {
+            header_name: "x-api-key".into(),
+        });
+        let runtime = RuntimeConfig::new("test-key");
+        let request = InferenceRequest::new("   ", Transcript::new());
+
+        let error = infer(&profile, &runtime, request).await.unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(error.to_string().contains("model must be a non-empty"));
     }
 
     #[test]

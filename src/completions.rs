@@ -467,6 +467,7 @@ pub async fn infer(
     runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
+    validate_model(&request)?;
     let client = build_client(profile, runtime)?;
     let messages = build_chat_messages(&request);
     let tools = build_chat_tools(&request);
@@ -523,6 +524,7 @@ pub async fn infer_stream(
     runtime: &RuntimeConfig,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
+    validate_model(&request)?;
     let client = build_client(profile, runtime)?;
     let messages = build_chat_messages(&request);
     let tools = build_chat_tools(&request);
@@ -695,6 +697,15 @@ fn process_stream_chunk(
     events
 }
 
+fn validate_model(request: &InferenceRequest) -> ProviderResult<()> {
+    if request.model.trim().is_empty() {
+        return Err(ProviderError::invalid_request(
+            "InferenceRequest.model must be a non-empty model identifier",
+        ));
+    }
+    Ok(())
+}
+
 fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
     let (message, code) = if let Ok(err) = serde_json::from_str::<ChatError>(body) {
         let msg = err.error.message.unwrap_or_else(|| body.to_string());
@@ -837,6 +848,21 @@ mod tests {
         let error = build_client(&profile, &RuntimeConfig::new("test-key")).unwrap_err();
         assert!(matches!(error, ProviderError::InvalidRequest { .. }));
         assert!(error.to_string().contains("Invalid default header name"));
+    }
+
+    #[tokio::test]
+    async fn test_infer_rejects_empty_model() {
+        let profile = ProviderProfile::new(
+            "test",
+            crate::ApiFamily::OpenAiChatCompletions,
+            "https://example.com/v1",
+        );
+        let runtime = RuntimeConfig::new("test-key");
+        let request = InferenceRequest::new("", Transcript::new());
+
+        let error = infer(&profile, &runtime, request).await.unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(error.to_string().contains("model must be a non-empty"));
     }
 
     #[test]

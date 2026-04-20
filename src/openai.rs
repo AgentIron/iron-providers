@@ -39,8 +39,6 @@ pub struct OpenAiConfig {
     pub api_key: String,
     /// Optional API base URL override.
     pub base_url: Option<String>,
-    /// Default model name used by callers that do not override it.
-    pub default_model: String,
     /// Auth strategy to use when constructing the HTTP client.
     /// When `None`, defaults to `BearerToken`.
     pub auth_strategy: Option<AuthStrategy>,
@@ -56,7 +54,6 @@ impl OpenAiConfig {
         Self {
             api_key,
             base_url: None,
-            default_model: "gpt-4o".to_string(),
             auth_strategy: None,
             default_headers: HashMap::new(),
             quirks: ProviderQuirks::default(),
@@ -66,12 +63,6 @@ impl OpenAiConfig {
     /// Set a custom base URL.
     pub fn with_base_url(mut self, url: String) -> Self {
         self.base_url = Some(url);
-        self
-    }
-
-    /// Set the default model.
-    pub fn with_model(mut self, model: String) -> Self {
-        self.default_model = model;
         self
     }
 
@@ -296,6 +287,15 @@ pub(crate) fn build_tool_choice(request: &InferenceRequest) -> Option<ToolChoice
     }
 }
 
+fn validate_model(request: &InferenceRequest) -> ProviderResult<()> {
+    if request.model.trim().is_empty() {
+        return Err(ProviderError::invalid_request(
+            "InferenceRequest.model must be a non-empty model identifier",
+        ));
+    }
+    Ok(())
+}
+
 /// Handle OpenAI errors
 fn handle_error(err: async_openai::error::OpenAIError) -> ProviderError {
     use async_openai::error::OpenAIError;
@@ -394,6 +394,7 @@ pub async fn infer(
     config: &OpenAiConfig,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
+    validate_model(&request)?;
     let client = build_client(config)?;
 
     let input_items = build_input_items(&request);
@@ -507,6 +508,7 @@ pub async fn infer_stream(
     config: &OpenAiConfig,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
+    validate_model(&request)?;
     let client = build_client(config)?;
 
     let input_items = build_input_items(&request);
@@ -645,6 +647,16 @@ mod tests {
             }
             _ => panic!("expected easy message"),
         }
+    }
+
+    #[tokio::test]
+    async fn infer_rejects_empty_model() {
+        use crate::{OpenAiConfig, ProviderError};
+        let config = OpenAiConfig::new("test-key".to_string());
+        let request = InferenceRequest::new("", Transcript::new());
+        let error = super::infer(&config, request).await.unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(error.to_string().contains("model must be a non-empty"));
     }
 
     #[test]
