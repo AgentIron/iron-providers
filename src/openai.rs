@@ -231,7 +231,7 @@ pub(crate) fn build_input_items(request: &InferenceRequest) -> Vec<InputItem> {
                     call_id: call_id.clone(),
                     name: tool_name.clone(),
                     arguments: serde_json::to_string(arguments)
-                        .unwrap_or_else(|_| arguments.to_string()),
+                        .expect("serde_json::to_string on Value is infallible"),
                     namespace: None,
                     id: None,
                     status: None,
@@ -243,8 +243,8 @@ pub(crate) fn build_input_items(request: &InferenceRequest) -> Vec<InputItem> {
                 result,
             } => {
                 // Tool results go as function_call_output
-                let output_str =
-                    serde_json::to_string(result).unwrap_or_else(|_| result.to_string());
+                let output_str = serde_json::to_string(result)
+                    .expect("serde_json::to_string on Value is infallible");
                 items.push(InputItem::Item(Item::FunctionCallOutput(
                     async_openai::types::responses::FunctionCallOutputItemParam {
                         call_id: call_id.clone(),

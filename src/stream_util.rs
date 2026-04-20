@@ -1,4 +1,4 @@
-//! Stream adapters that enforce the documented streaming contract.
+//! Stream adapters and helpers that enforce the documented streaming contract.
 
 use crate::error::ProviderResult;
 use crate::model::ProviderEvent;
@@ -6,6 +6,22 @@ use futures::stream::Stream;
 use pin_project::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+/// Truncate a streaming payload to a bounded length for safe logging.
+///
+/// Honors UTF-8 char boundaries so logs never panic on multibyte input.
+pub(crate) fn truncate_for_log(s: &str) -> String {
+    const MAX: usize = 200;
+    if s.len() <= MAX {
+        s.to_string()
+    } else {
+        let mut end = MAX;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
+    }
+}
 
 /// Fuses a provider event stream at the first terminal event.
 ///

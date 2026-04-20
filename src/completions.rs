@@ -3,7 +3,7 @@ use crate::{
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
     profile::{AuthStrategy, ProviderProfile, RuntimeConfig},
     sse::SseParser,
-    stream_util::TerminatingStream,
+    stream_util::{truncate_for_log, TerminatingStream},
     InferenceRequest, ProviderError,
 };
 use futures::stream::{BoxStream, StreamExt};
@@ -141,8 +141,8 @@ fn build_chat_messages(request: &InferenceRequest) -> Vec<Value> {
                 tool_name,
                 arguments,
             } => {
-                let args_str =
-                    serde_json::to_string(arguments).unwrap_or_else(|_| arguments.to_string());
+                let args_str = serde_json::to_string(arguments)
+                    .expect("serde_json::to_string on Value is infallible");
                 pending_tool_calls.push(json!({
                     "id": call_id,
                     "type": "function",
@@ -165,8 +165,8 @@ fn build_chat_messages(request: &InferenceRequest) -> Vec<Value> {
                     }));
                     pending_tool_calls.clear();
                 }
-                let output_str =
-                    serde_json::to_string(result).unwrap_or_else(|_| result.to_string());
+                let output_str = serde_json::to_string(result)
+                    .expect("serde_json::to_string on Value is infallible");
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
@@ -615,11 +615,18 @@ fn process_sse_stream(
                         continue;
                     }
 
-                    if let Ok(chunk) =
-                        serde_json::from_str::<ChatCompletionStreamChunk>(&sse_event.data)
-                    {
-                        let new_events = process_stream_chunk(chunk, &mut assembler);
-                        events.extend(new_events);
+                    match serde_json::from_str::<ChatCompletionStreamChunk>(&sse_event.data) {
+                        Ok(chunk) => {
+                            let new_events = process_stream_chunk(chunk, &mut assembler);
+                            events.extend(new_events);
+                        }
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                payload = %truncate_for_log(&sse_event.data),
+                                "Failed to parse Chat Completions stream chunk, skipping"
+                            );
+                        }
                     }
                 }
             }

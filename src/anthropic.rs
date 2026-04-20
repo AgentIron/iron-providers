@@ -3,13 +3,14 @@ use crate::{
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
     profile::{AuthStrategy, ProviderProfile, RuntimeConfig},
     sse::SseParser,
-    stream_util::TerminatingStream,
+    stream_util::{truncate_for_log, TerminatingStream},
     InferenceRequest, ProviderError,
 };
 use futures::stream::{BoxStream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tracing::warn;
 
 #[derive(Debug, Serialize)]
 struct AnthropicRequest {
@@ -214,9 +215,11 @@ fn build_anthropic_messages(request: &InferenceRequest) -> Vec<Value> {
                     }));
                     pending_tool_calls.clear();
                 }
+                let result_str = serde_json::to_string(result)
+                    .expect("serde_json::to_string on Value is infallible");
                 messages.push(json!({
                     "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": call_id, "content": serde_json::to_string(result).unwrap_or_else(|_| result.to_string())}]
+                    "content": [{"type": "tool_result", "tool_use_id": call_id, "content": result_str}]
                 }));
             }
         }
@@ -402,10 +405,18 @@ fn process_sse_stream(
                         continue;
                     }
 
-                    if let Ok(event) = serde_json::from_str::<AnthropicStreamEvent>(&sse_event.data)
-                    {
-                        let new_events = assembler.process_event(event);
-                        events.extend(new_events);
+                    match serde_json::from_str::<AnthropicStreamEvent>(&sse_event.data) {
+                        Ok(event) => {
+                            let new_events = assembler.process_event(event);
+                            events.extend(new_events);
+                        }
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                payload = %truncate_for_log(&sse_event.data),
+                                "Failed to parse Anthropic stream event, skipping"
+                            );
+                        }
                     }
                 }
             }
