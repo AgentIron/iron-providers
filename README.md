@@ -58,6 +58,24 @@ let request = InferenceRequest::new("model-name", Transcript::with_messages(vec!
 let events = provider.infer(request).await?;
 ```
 
+### HTTP Timeouts
+
+All adapters apply `connect_timeout` (default 30s) and `read_timeout`
+(default 60s between socket reads) to their HTTP clients so a stalled
+provider surfaces as a transport error instead of hanging the caller.
+Override per session on `RuntimeConfig`:
+
+```rust
+use std::time::Duration;
+
+let runtime = RuntimeConfig::new("key")
+    .with_connect_timeout(Duration::from_secs(10))
+    .with_read_timeout(Duration::from_secs(120));
+```
+
+`OpenAiConfig` exposes equivalent `with_connect_timeout` /
+`with_read_timeout` builders for direct callers of `openai::infer`.
+
 ## Request Model
 
 `InferenceRequest` now carries an `InferenceContext`:

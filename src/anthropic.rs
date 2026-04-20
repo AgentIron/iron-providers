@@ -162,6 +162,8 @@ fn build_client(profile: &ProviderProfile, runtime: &RuntimeConfig) -> ProviderR
 
     Client::builder()
         .default_headers(headers)
+        .connect_timeout(runtime.effective_connect_timeout())
+        .read_timeout(runtime.effective_read_timeout())
         .build()
         .map_err(|e| {
             ProviderError::general(format!(

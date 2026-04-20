@@ -43,6 +43,13 @@ impl GenericProvider {
             .with_auth_strategy(self.profile.auth_strategy.clone())
             .with_quirks(self.profile.quirks.clone());
 
+        if let Some(timeout) = self.runtime.connect_timeout {
+            config = config.with_connect_timeout(timeout);
+        }
+        if let Some(timeout) = self.runtime.read_timeout {
+            config = config.with_read_timeout(timeout);
+        }
+
         for (key, value) in &self.profile.default_headers {
             config = config.with_header(key.clone(), value.clone());
         }

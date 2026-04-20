@@ -22,6 +22,9 @@ use async_openai::{
 use futures::stream::{BoxStream, StreamExt};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
+
+use crate::profile::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT};
 
 /// Projection trait for caller-owned config types that can produce an `OpenAiConfig`.
 ///
@@ -46,6 +49,10 @@ pub struct OpenAiConfig {
     pub default_headers: HashMap<String, String>,
     /// Provider-specific quirks.
     pub quirks: ProviderQuirks,
+    /// TCP + TLS connect timeout. `None` uses `DEFAULT_CONNECT_TIMEOUT`.
+    pub connect_timeout: Option<Duration>,
+    /// Inter-chunk read timeout. `None` uses `DEFAULT_READ_TIMEOUT`.
+    pub read_timeout: Option<Duration>,
 }
 
 impl OpenAiConfig {
@@ -57,6 +64,8 @@ impl OpenAiConfig {
             auth_strategy: None,
             default_headers: HashMap::new(),
             quirks: ProviderQuirks::default(),
+            connect_timeout: None,
+            read_timeout: None,
         }
     }
 
@@ -64,6 +73,28 @@ impl OpenAiConfig {
     pub fn with_base_url(mut self, url: String) -> Self {
         self.base_url = Some(url);
         self
+    }
+
+    /// Override the TCP+TLS connect timeout.
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
+        self
+    }
+
+    /// Override the inter-chunk read timeout.
+    pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
+        self.read_timeout = Some(timeout);
+        self
+    }
+
+    /// Resolve the effective connect timeout (user-provided or default).
+    pub fn effective_connect_timeout(&self) -> Duration {
+        self.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT)
+    }
+
+    /// Resolve the effective read timeout (user-provided or default).
+    pub fn effective_read_timeout(&self) -> Duration {
+        self.read_timeout.unwrap_or(DEFAULT_READ_TIMEOUT)
     }
 
     /// Set the auth strategy.
@@ -113,84 +144,72 @@ fn build_client(config: &OpenAiConfig) -> ProviderResult<Client<OpenAIConfig>> {
         .as_ref()
         .unwrap_or(&AuthStrategy::BearerToken);
 
-    // If using non-standard auth or custom headers, build a custom reqwest client
-    let needs_custom_client =
-        !matches!(strategy, AuthStrategy::BearerToken) || !config.default_headers.is_empty();
+    let mut headers = reqwest::header::HeaderMap::new();
 
-    if needs_custom_client {
-        let mut headers = reqwest::header::HeaderMap::new();
-
-        match strategy {
-            AuthStrategy::BearerToken => {
-                let val =
-                    reqwest::header::HeaderValue::from_str(&format!("Bearer {}", config.api_key))
-                        .map_err(|e| {
-                        ProviderError::invalid_request(format!("Invalid bearer token value: {}", e))
-                    })?;
-                headers.insert(reqwest::header::AUTHORIZATION, val);
-            }
-            AuthStrategy::ApiKeyHeader { header_name } => {
-                let key = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(
-                    |e| {
-                        ProviderError::invalid_request(format!(
-                            "Invalid header name '{}': {}",
-                            header_name, e
-                        ))
-                    },
-                )?;
-                let val = reqwest::header::HeaderValue::from_str(&config.api_key).map_err(|e| {
-                    ProviderError::invalid_request(format!("Invalid API key value: {}", e))
+    match strategy {
+        AuthStrategy::BearerToken => {
+            let val = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", config.api_key))
+                .map_err(|e| {
+                    ProviderError::invalid_request(format!("Invalid bearer token value: {}", e))
                 })?;
-                headers.insert(key, val);
-            }
-            AuthStrategy::Custom {
-                header_name,
-                prefix,
-            } => {
-                let value = match prefix {
-                    Some(p) => format!("{} {}", p, config.api_key),
-                    None => config.api_key.clone(),
-                };
-                let key = reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(
-                    |e| {
-                        ProviderError::invalid_request(format!(
-                            "Invalid custom header name '{}': {}",
-                            header_name, e
-                        ))
-                    },
-                )?;
-                let val = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
-                    ProviderError::invalid_request(format!("Invalid custom header value: {}", e))
+            headers.insert(reqwest::header::AUTHORIZATION, val);
+        }
+        AuthStrategy::ApiKeyHeader { header_name } => {
+            let key =
+                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
+                    ProviderError::invalid_request(format!(
+                        "Invalid header name '{}': {}",
+                        header_name, e
+                    ))
                 })?;
-                headers.insert(key, val);
-            }
-        }
-
-        for (key, value) in &config.default_headers {
-            let hk = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
-                ProviderError::invalid_request(format!(
-                    "Invalid default header name '{}': {}",
-                    key, e
-                ))
+            let val = reqwest::header::HeaderValue::from_str(&config.api_key).map_err(|e| {
+                ProviderError::invalid_request(format!("Invalid API key value: {}", e))
             })?;
-            let hv = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
-                ProviderError::invalid_request(format!(
-                    "Invalid default header value for '{}': {}",
-                    key, e
-                ))
-            })?;
-            headers.insert(hk, hv);
+            headers.insert(key, val);
         }
-
-        let http_client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .map_err(|e| ProviderError::general(format!("Failed to build HTTP client: {}", e)))?;
-
-        Ok(Client::with_config(openai_config).with_http_client(http_client))
-    } else {
-        Ok(Client::with_config(openai_config))
+        AuthStrategy::Custom {
+            header_name,
+            prefix,
+        } => {
+            let value = match prefix {
+                Some(p) => format!("{} {}", p, config.api_key),
+                None => config.api_key.clone(),
+            };
+            let key =
+                reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {
+                    ProviderError::invalid_request(format!(
+                        "Invalid custom header name '{}': {}",
+                        header_name, e
+                    ))
+                })?;
+            let val = reqwest::header::HeaderValue::from_str(&value).map_err(|e| {
+                ProviderError::invalid_request(format!("Invalid custom header value: {}", e))
+            })?;
+            headers.insert(key, val);
+        }
     }
+
+    for (key, value) in &config.default_headers {
+        let hk = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
+            ProviderError::invalid_request(format!("Invalid default header name '{}': {}", key, e))
+        })?;
+        let hv = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+            ProviderError::invalid_request(format!(
+                "Invalid default header value for '{}': {}",
+                key, e
+            ))
+        })?;
+        headers.insert(hk, hv);
+    }
+
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .connect_timeout(config.effective_connect_timeout())
+        .read_timeout(config.effective_read_timeout())
+        .build()
+        .map_err(|e| ProviderError::general(format!("Failed to build HTTP client: {}", e)))?;
+
+    Ok(Client::with_config(openai_config).with_http_client(http_client))
 }
 
 /// Build input items from our transcript

@@ -1,6 +1,15 @@
 use crate::ProviderError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
+
+/// Default maximum time to establish a TCP+TLS connection.
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default maximum time between socket reads. For streaming responses this
+/// bounds inter-chunk silence; a provider that stalls mid-stream will fail
+/// rather than hang indefinitely.
+pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ApiFamily {
@@ -98,13 +107,43 @@ impl ProviderProfile {
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub api_key: String,
+    /// TCP + TLS connect timeout. `None` uses `DEFAULT_CONNECT_TIMEOUT`.
+    pub connect_timeout: Option<Duration>,
+    /// Inter-chunk read timeout. `None` uses `DEFAULT_READ_TIMEOUT`.
+    pub read_timeout: Option<Duration>,
 }
 
 impl RuntimeConfig {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
+            connect_timeout: None,
+            read_timeout: None,
         }
+    }
+
+    /// Override the TCP+TLS connect timeout.
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
+        self
+    }
+
+    /// Override the inter-chunk read timeout. Applies to streaming responses
+    /// so a stalled provider is surfaced as a transport error rather than
+    /// hanging indefinitely.
+    pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
+        self.read_timeout = Some(timeout);
+        self
+    }
+
+    /// Resolve the effective connect timeout (user-provided or default).
+    pub fn effective_connect_timeout(&self) -> Duration {
+        self.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT)
+    }
+
+    /// Resolve the effective read timeout (user-provided or default).
+    pub fn effective_read_timeout(&self) -> Duration {
+        self.read_timeout.unwrap_or(DEFAULT_READ_TIMEOUT)
     }
 
     pub fn validate(&self) -> Result<(), ProviderError> {
