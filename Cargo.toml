@@ -22,10 +22,10 @@ thiserror = "2"
 tracing = "0.1"
 futures = "0.3"
 pin-project = "1"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
 
 # OpenAI SDK - enable features for Responses API
-async-openai = { version = "0.35", features = ["responses", "response-types", "_api"] }
+async-openai = { version = "0.36", features = ["responses", "response-types", "_api"] }
 
 # Stream utilities
 async-stream = "0.3"
