@@ -84,8 +84,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
           git commit -m "chore: release v${VERSION} [skip release]"
-          git tag "v${VERSION}"
-          git push origin main --follow-tags
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+          git push origin main "v${VERSION}"
 
       - name: Authenticate with crates.io
         if: steps.release_gate.outputs.should_release == 'true'
