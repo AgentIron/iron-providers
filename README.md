@@ -218,6 +218,21 @@ invoke security
 These tasks print a short summary with warnings, failures, and the count of
 successful steps only.
 
+## GitHub Workflow
+
+- Open a GitHub issue before starting work.
+- Create a feature branch for the issue and open a pull request against `main`.
+- Pull requests must reference an issue in the title or body, for example `Closes #123`.
+- The `Pull Request` workflow runs `cargo build`, `cargo fmt --check`, `cargo clippy`, and `cargo test` on every PR to `main`.
+- Merges to `main` trigger an automatic patch release that bumps `Cargo.toml`, creates a `vX.Y.Z` tag, creates a GitHub release, and publishes the crate to crates.io.
+- Coordinated `minor` and `major` releases are handled through the `Release Manual` workflow in GitHub Actions.
+
+Repository configuration still matters:
+
+- crates.io Trusted Publishing is supported by the release workflows through GitHub OIDC, so `CRATES_IO_TOKEN` is not required when Trusted Publishing is configured for this repository and workflow.
+- If branch protection blocks workflow pushes to `main`, add a `RELEASE_GITHUB_TOKEN` secret for a token that is allowed to push the automated release commit and tag.
+- Branch protection is configured to require the `Validate PR Policy` and `Rust Checks` status checks before merge.
+
 `build` runs:
 
 - `cargo build --manifest-path Cargo.toml --all-targets`
