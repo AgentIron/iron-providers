@@ -229,7 +229,7 @@ successful steps only.
 
 Repository configuration still matters:
 
-- crates.io Trusted Publishing is supported by the release workflows through GitHub OIDC, so `CRATES_IO_TOKEN` is not required when Trusted Publishing is configured for this repository and workflow.
+- crates.io Trusted Publishing is supported by the release workflows through GitHub OIDC plus `rust-lang/crates-io-auth-action`, so `CRATES_IO_TOKEN` is not required when Trusted Publishing is configured for this repository and workflow.
 - If branch protection blocks workflow pushes to `main`, add a `RELEASE_GITHUB_TOKEN` secret for a token that is allowed to push the automated release commit and tag.
 - Branch protection is configured to require the `Validate PR Policy` and `Rust Checks` status checks before merge.
 
