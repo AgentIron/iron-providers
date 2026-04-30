@@ -1,0 +1,4 @@
+- This provider uses the OpenAI Responses or Chat Completions API. Both accept JSON schema `tools` arrays.
+- Function tools require `type`, `name`, `description`, and `parameters` as JSON Schema.
+- Streaming tool call deltas arrive in `choices[].delta.tool_calls[]` and must be assembled by index.
+- Place system instructions in the `messages` array with role `system` for Chat Completions.

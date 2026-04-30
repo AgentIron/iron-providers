@@ -102,6 +102,15 @@ impl ProviderProfile {
     pub fn models_dev_slug(&self) -> &str {
         self.models_dev_id.as_deref().unwrap_or(&self.slug)
     }
+
+    pub fn system_prompt_fragment(&self) -> &'static str {
+        match self.family {
+            ApiFamily::AnthropicMessages => crate::anthropic::SYSTEM_PROMPT_FRAGMENT,
+            ApiFamily::OpenAiResponses | ApiFamily::OpenAiChatCompletions => {
+                crate::openai::SYSTEM_PROMPT_FRAGMENT
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

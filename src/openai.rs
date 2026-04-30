@@ -515,9 +515,18 @@ pub async fn infer_stream(
     Ok(TerminatingStream::new(events).boxed())
 }
 
+pub const SYSTEM_PROMPT_FRAGMENT: &str = include_str!("system_prompt_fragments/openai.md");
+
+pub fn system_prompt_fragment() -> &'static str {
+    SYSTEM_PROMPT_FRAGMENT
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_input_items, build_tool_choice, build_tools, process_stream_event};
+    use super::{
+        build_input_items, build_tool_choice, build_tools, process_stream_event,
+        system_prompt_fragment, SYSTEM_PROMPT_FRAGMENT,
+    };
     use crate::{InferenceRequest, Message, RuntimeRecord, ToolDefinition, ToolPolicy, Transcript};
     use async_openai::types::responses::{
         EasyInputContent, InputItem, ResponseStreamEvent, Tool as OpenAiTool, ToolChoiceOptions,
@@ -649,5 +658,12 @@ mod tests {
         assert!(!events
             .iter()
             .any(|event| matches!(event, crate::ProviderEvent::Complete)));
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_is_non_empty() {
+        let fragment = system_prompt_fragment();
+        assert!(!fragment.is_empty());
+        assert_eq!(fragment, SYSTEM_PROMPT_FRAGMENT);
     }
 }

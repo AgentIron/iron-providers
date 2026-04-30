@@ -84,6 +84,18 @@ impl ProviderRegistry {
         slugs
     }
 
+    pub fn system_prompt_fragment(&self, provider_name: &str) -> ProviderResult<&'static str> {
+        let key = provider_name.to_lowercase();
+        let profile = self.profiles.get(&key).ok_or_else(|| {
+            let available: Vec<&str> = self.profiles.keys().map(|s| s.as_str()).collect();
+            ProviderError::general(format!(
+                "Unknown provider '{}'. Available: {:?}",
+                provider_name, available
+            ))
+        })?;
+        Ok(profile.system_prompt_fragment())
+    }
+
     pub fn register_builtins(&mut self) {
         self.register(
             ProviderProfile::new(
@@ -323,5 +335,58 @@ mod tests {
         let mut sorted = slugs.clone();
         sorted.sort();
         assert_eq!(slugs, sorted);
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_for_all_builtins() {
+        let registry = ProviderRegistry::default();
+        for slug in registry.slugs() {
+            let fragment = registry.system_prompt_fragment(slug).expect(slug);
+            assert!(
+                !fragment.is_empty(),
+                "fragment for '{}' should not be empty",
+                slug
+            );
+        }
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_case_insensitive() {
+        let registry = ProviderRegistry::default();
+        let lower = registry.system_prompt_fragment("anthropic").unwrap();
+        let upper = registry.system_prompt_fragment("ANTHROPIC").unwrap();
+        assert_eq!(lower, upper);
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_unknown_provider() {
+        let registry = ProviderRegistry::default();
+        let result = registry.system_prompt_fragment("nonexistent");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("Unknown provider"));
+        }
+    }
+
+    #[test]
+    fn test_fragments_contain_no_tera_delimiters() {
+        let fragments = [
+            crate::anthropic::SYSTEM_PROMPT_FRAGMENT,
+            crate::openai::SYSTEM_PROMPT_FRAGMENT,
+        ];
+        for fragment in fragments {
+            assert!(
+                !fragment.contains("{{"),
+                "fragment should not contain Tera expression delimiter"
+            );
+            assert!(
+                !fragment.contains("{%"),
+                "fragment should not contain Tera block delimiter"
+            );
+            assert!(
+                !fragment.contains("{#"),
+                "fragment should not contain Tera comment delimiter"
+            );
+        }
     }
 }

@@ -1,0 +1,4 @@
+- This provider uses the Anthropic Messages API. Claude models support extended thinking and prompt caching.
+- Tools are defined with JSON schema in `input_schema` fields. Tool use appears as `tool_use` content blocks.
+- Streaming tool calls use `partial_json` deltas and must be assembled before completion.
+- Always include `max_tokens` in requests; default to a conservative value when unset.
