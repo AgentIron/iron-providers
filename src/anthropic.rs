@@ -528,6 +528,12 @@ fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
     }
 }
 
+pub const SYSTEM_PROMPT_FRAGMENT: &str = include_str!("system_prompt_fragments/anthropic.md");
+
+pub fn system_prompt_fragment() -> &'static str {
+    SYSTEM_PROMPT_FRAGMENT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,5 +794,12 @@ mod tests {
         assert_eq!(tool_calls[1].call_id, "call_1");
         assert_eq!(tool_calls[1].tool_name, "search");
         assert_eq!(tool_calls[1].arguments["query"], "rust");
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_is_non_empty() {
+        let fragment = system_prompt_fragment();
+        assert!(!fragment.is_empty());
+        assert_eq!(fragment, SYSTEM_PROMPT_FRAGMENT);
     }
 }
