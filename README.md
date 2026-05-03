@@ -23,19 +23,21 @@ Built-in provider profiles are identified by slug. Each slug maps to a specific 
 | `zai` | `zai` | OpenAI Chat Completions | General | Bearer token |
 | `zai-code` | `zai-coding-plan` | OpenAI Chat Completions | Coding | Bearer token |
 | `kimi` | `moonshotai` | OpenAI Chat Completions | General | Bearer token |
-| `kimi-code` | `kimi-for-coding` | Anthropic Messages | Coding | `x-api-key` header |
+| `kimi-code` | `kimi-for-coding` | Anthropic Messages | Coding | `x-api-key` header or OAuth Bearer |
 | `openrouter` | `openrouter` | OpenAI Chat Completions | General | Bearer token |
 | `requesty` | `requesty` | OpenAI Chat Completions | General | Bearer token |
+| `codex` | `openai` | Codex Responses | Coding | OAuth Bearer |
 
 Coding-purpose slugs route to endpoints optimized for code generation tasks.
 
 ## API Families
 
-Providers are grouped into three adapter families:
+Providers are grouped into four adapter families:
 
 - **OpenAiResponses** — Uses the OpenAI Responses API via `async-openai`.
 - **OpenAiChatCompletions** — Uses the `/chat/completions` endpoint via `reqwest`. Compatible with any OpenAI-compatible API.
 - **AnthropicMessages** — Uses the Anthropic `/v1/messages` endpoint via `reqwest`.
+- **CodexResponses** — Uses the Codex `/responses` endpoint via `reqwest`. Supports `store: false`, `reasoning`, and `parallel_tool_calls`.
 
 ## Registry Usage
 
@@ -75,6 +77,41 @@ let runtime = RuntimeConfig::new("key")
 
 `OpenAiConfig` exposes equivalent `with_connect_timeout` /
 `with_read_timeout` builders for direct callers of `openai::infer`.
+
+## Credentials
+
+Providers accept either an API key or an OAuth bearer token via `RuntimeConfig`.
+
+**API key (default):**
+
+```rust
+use iron_providers::RuntimeConfig;
+
+let runtime = RuntimeConfig::new("your-api-key");
+```
+
+**OAuth bearer token:**
+
+```rust
+use iron_providers::{RuntimeConfig, ProviderCredential};
+use std::time::{SystemTime, Duration};
+
+let runtime = RuntimeConfig::from_credential(
+    ProviderCredential::OAuthBearer {
+        access_token: "oauth-access-token".to_string(),
+        expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+        id_token: None,
+    }
+);
+```
+
+Each `ProviderProfile` declares which credential kinds it supports via `credential_auth`. When a credential is passed, `GenericProvider` validates:
+
+1. The credential kind is supported by the profile.
+2. OAuth bearer tokens have not expired.
+3. The underlying secret is non-empty.
+
+If validation fails, `ProviderError::auth()` is returned immediately with a clear message.
 
 ## Request Model
 
@@ -275,11 +312,9 @@ See [`MIGRATION.md`](./MIGRATION.md) for breaking API changes including:
 
 ## Dependency Notes
 
-`async-openai` was upgraded to `0.35`.
+`async-openai` was upgraded to `0.36`.
 
-The planned direct `reqwest` upgrade to `0.13` is currently deferred because
-`async-openai 0.35` still depends on `reqwest 0.12`, which would otherwise
-introduce incompatible `reqwest::Client` types into the dependency graph.
+`reqwest` was upgraded to `0.13`.
 
 ## License
 

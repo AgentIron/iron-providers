@@ -5,7 +5,7 @@
 //! module centralizes that so there is one place to change auth behavior, apply
 //! timeouts, or adjust fail-fast validation.
 
-use crate::profile::AuthStrategy;
+use crate::profile::{AuthStrategy, ProviderCredential};
 use crate::{ProviderError, ProviderResult};
 use reqwest::Client;
 use std::collections::HashMap;
@@ -18,7 +18,7 @@ use std::time::Duration;
 /// `"profile 'zai'"` or `"OpenAI client"`).
 pub(crate) struct HttpClientParams<'a> {
     pub context: &'a str,
-    pub api_key: &'a str,
+    pub credential: &'a ProviderCredential,
     pub auth_strategy: &'a AuthStrategy,
     pub default_headers: &'a HashMap<String, String>,
     pub extra_headers: &'a [(&'a str, &'a str)],
@@ -54,9 +54,10 @@ pub(crate) fn build_http_client(params: HttpClientParams<'_>) -> ProviderResult<
         headers.insert(hk, hv);
     }
 
+    let secret = params.credential.secret();
     match params.auth_strategy {
         AuthStrategy::BearerToken => {
-            let val = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", params.api_key))
+            let val = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", secret))
                 .map_err(|e| {
                     ProviderError::invalid_request(format!(
                         "Invalid bearer token value for {}: {}",
@@ -73,7 +74,7 @@ pub(crate) fn build_http_client(params: HttpClientParams<'_>) -> ProviderResult<
                         header_name, params.context, e
                     ))
                 })?;
-            let val = reqwest::header::HeaderValue::from_str(params.api_key).map_err(|e| {
+            let val = reqwest::header::HeaderValue::from_str(secret).map_err(|e| {
                 ProviderError::invalid_request(format!(
                     "Invalid API key value for {}: {}",
                     params.context, e
@@ -86,8 +87,8 @@ pub(crate) fn build_http_client(params: HttpClientParams<'_>) -> ProviderResult<
             prefix,
         } => {
             let value = match prefix {
-                Some(p) => format!("{} {}", p, params.api_key),
-                None => params.api_key.to_string(),
+                Some(p) => format!("{} {}", p, secret),
+                None => secret.to_string(),
             };
             let key =
                 reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(|e| {

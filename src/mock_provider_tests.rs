@@ -1,9 +1,12 @@
 use crate::{
     anthropic, completions,
     http_client::{build_http_client, HttpClientParams},
-    profile::{ApiFamily, AuthStrategy, ProviderProfile, RuntimeConfig},
+    profile::{
+        ApiFamily, AuthStrategy, CredentialKind, ProviderCredential, ProviderProfile, RuntimeConfig,
+    },
     InferenceRequest, Message, ProviderEvent, ProviderRegistry, Transcript,
 };
+use mockito::Matcher;
 use serde_json::json;
 
 fn completions_profile(slug: &str, base_url: &str) -> ProviderProfile {
@@ -25,10 +28,17 @@ fn build_test_client(
     runtime: &RuntimeConfig,
 ) -> crate::ProviderResult<reqwest::Client> {
     let context = format!("test profile '{}'", profile.slug);
+    let kind = runtime.credential.kind();
+    let auth_strategy = profile.auth_strategy_for(kind).ok_or_else(|| {
+        crate::ProviderError::auth(format!(
+            "Provider '{}' does not support {:?} credentials",
+            profile.slug, kind
+        ))
+    })?;
     build_http_client(HttpClientParams {
         context: &context,
-        api_key: &runtime.api_key,
-        auth_strategy: &profile.auth_strategy,
+        credential: &runtime.credential,
+        auth_strategy,
         default_headers: &profile.default_headers,
         extra_headers: &[],
         connect_timeout: runtime.effective_connect_timeout(),
@@ -170,6 +180,68 @@ async fn test_anthropic_basic_response() {
     assert!(events.iter().any(
         |e| matches!(e, ProviderEvent::Output { content } if content == "Hello from anthropic")
     ));
+}
+
+#[tokio::test]
+async fn test_kimi_code_api_key_uses_x_api_key_header() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "kimi-api-key")
+        .match_header("authorization", Matcher::Missing)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(anthropic_response("Hello from Kimi Code"))
+        .create_async()
+        .await;
+
+    let profile = anthropic_profile("kimi-code", &server.url())
+        .with_credential_auth(CredentialKind::OAuthBearer, AuthStrategy::BearerToken);
+    let runtime = RuntimeConfig::new("kimi-api-key");
+    let request = InferenceRequest::new(
+        "kimi-code-model",
+        Transcript::with_messages(vec![Message::user("hi")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let result = anthropic::infer(client, &profile, request).await;
+    mock.assert_async().await;
+
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_kimi_code_oauth_uses_bearer_header() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("authorization", "Bearer kimi-oauth-token")
+        .match_header("x-api-key", Matcher::Missing)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(anthropic_response("Hello from Kimi Code OAuth"))
+        .create_async()
+        .await;
+
+    let profile = anthropic_profile("kimi-code", &server.url())
+        .with_credential_auth(CredentialKind::OAuthBearer, AuthStrategy::BearerToken);
+    let runtime = RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+        access_token: "kimi-oauth-token".into(),
+        expires_at: None,
+        id_token: None,
+    });
+    let request = InferenceRequest::new(
+        "kimi-code-model",
+        Transcript::with_messages(vec![Message::user("hi")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let result = anthropic::infer(client, &profile, request).await;
+    mock.assert_async().await;
+
+    assert!(result.is_ok());
 }
 
 #[tokio::test]
