@@ -49,6 +49,7 @@
 //! [`InferenceRequest`].
 
 pub mod anthropic;
+pub mod codex;
 pub mod completions;
 pub mod error;
 pub mod generic_provider;
@@ -72,8 +73,8 @@ pub use model::{
     Transcript, CHOICE_REQUEST_TOOL_NAME,
 };
 pub use profile::{
-    ApiFamily, AuthStrategy, EndpointPurpose, ProviderProfile, ProviderQuirks, RuntimeConfig,
-    RuntimeConfigSource,
+    ApiFamily, AuthStrategy, CredentialAuthConfig, CredentialKind, EndpointPurpose,
+    ProviderCredential, ProviderProfile, ProviderQuirks, RuntimeConfig, RuntimeConfigSource,
 };
 pub use provider::{OpenAiProvider, Provider, ProviderFuture};
 pub use registry::ProviderRegistry;
@@ -82,10 +83,11 @@ pub use openai::{OpenAiConfig, OpenAiConfigSource};
 
 pub mod prelude {
     pub use crate::{
-        ApiFamily, AuthStrategy, ChoiceItem, ChoiceRequest, ChoiceSelectionMode, EndpointPurpose,
-        GenerationConfig, GenericProvider, InferenceContext, InferenceRequest, Message,
-        OpenAiConfig, OpenAiConfigSource, OpenAiProvider, Provider, ProviderError, ProviderEvent,
-        ProviderProfile, ProviderRegistry, ProviderResult, RuntimeConfig, RuntimeConfigSource,
-        RuntimeRecord, ToolCall, ToolDefinition, ToolPolicy, Transcript, CHOICE_REQUEST_TOOL_NAME,
+        ApiFamily, AuthStrategy, ChoiceItem, ChoiceRequest, ChoiceSelectionMode, CredentialKind,
+        EndpointPurpose, GenerationConfig, GenericProvider, InferenceContext, InferenceRequest,
+        Message, OpenAiConfig, OpenAiConfigSource, OpenAiProvider, Provider, ProviderCredential,
+        ProviderError, ProviderEvent, ProviderProfile, ProviderRegistry, ProviderResult,
+        RuntimeConfig, RuntimeConfigSource, RuntimeRecord, ToolCall, ToolDefinition, ToolPolicy,
+        Transcript, CHOICE_REQUEST_TOOL_NAME,
     };
 }

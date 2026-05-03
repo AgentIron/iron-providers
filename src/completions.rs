@@ -18,10 +18,17 @@ fn build_client(
     runtime: &crate::profile::RuntimeConfig,
 ) -> ProviderResult<Client> {
     let context = format!("profile '{}'", profile.slug);
+    let kind = runtime.credential.kind();
+    let auth_strategy = profile.auth_strategy_for(kind).ok_or_else(|| {
+        ProviderError::auth(format!(
+            "Provider '{}' does not support {:?} credentials",
+            profile.slug, kind
+        ))
+    })?;
     crate::http_client::build_http_client(crate::http_client::HttpClientParams {
         context: &context,
-        api_key: &runtime.api_key,
-        auth_strategy: &profile.auth_strategy,
+        credential: &runtime.credential,
+        auth_strategy,
         default_headers: &profile.default_headers,
         extra_headers: &[],
         connect_timeout: runtime.effective_connect_timeout(),

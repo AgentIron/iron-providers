@@ -3,7 +3,7 @@ use crate::provider::{Provider, ProviderFuture};
 use crate::{
     openai::OpenAiConfig,
     profile::{ApiFamily, ProviderProfile, RuntimeConfig, RuntimeConfigSource},
-    InferenceRequest, ProviderEvent, ProviderResult,
+    InferenceRequest, ProviderError, ProviderEvent, ProviderResult,
 };
 use async_openai::{config::OpenAIConfig, Client as OpenAiClient};
 use futures::stream::BoxStream;
@@ -59,10 +59,36 @@ impl GenericProvider {
     fn build(profile: Arc<ProviderProfile>, runtime: RuntimeConfig) -> ProviderResult<Self> {
         let context = format!("profile '{}'", profile.slug);
 
+        // Validate credential kind is supported by this profile.
+        let kind = runtime.credential.kind();
+        let auth_strategy = profile
+            .auth_strategy_for(kind)
+            .ok_or_else(|| {
+                ProviderError::auth(format!(
+                    "Provider '{}' does not support {:?} credentials",
+                    profile.slug, kind
+                ))
+            })?
+            .clone();
+
+        // Validate OAuth expiry.
+        if let crate::profile::ProviderCredential::OAuthBearer {
+            expires_at: Some(exp),
+            ..
+        } = &runtime.credential
+        {
+            if std::time::SystemTime::now() >= *exp {
+                return Err(ProviderError::auth(format!(
+                    "OAuth credential for '{}' has expired",
+                    profile.slug
+                )));
+            }
+        }
+
         let http_client = build_http_client(HttpClientParams {
             context: &context,
-            api_key: &runtime.api_key,
-            auth_strategy: &profile.auth_strategy,
+            credential: &runtime.credential,
+            auth_strategy: &auth_strategy,
             default_headers: &profile.default_headers,
             extra_headers: &[],
             connect_timeout: runtime.effective_connect_timeout(),
@@ -71,7 +97,7 @@ impl GenericProvider {
 
         let openai_client = if profile.family == ApiFamily::OpenAiResponses {
             let config = Self::build_openai_config(&profile, &runtime);
-            let mut openai_config = OpenAIConfig::default().with_api_key(&config.api_key);
+            let mut openai_config = OpenAIConfig::default().with_api_key(config.api_key);
             if let Some(ref base_url) = config.base_url {
                 openai_config = openai_config.with_api_base(base_url);
             }
@@ -97,9 +123,14 @@ impl GenericProvider {
     }
 
     fn build_openai_config(profile: &ProviderProfile, runtime: &RuntimeConfig) -> OpenAiConfig {
-        let mut config = OpenAiConfig::new(runtime.api_key.clone())
+        let mut config = OpenAiConfig::new(runtime.credential.secret().to_string())
             .with_base_url(profile.base_url.clone())
-            .with_auth_strategy(profile.auth_strategy.clone())
+            .with_auth_strategy(
+                profile
+                    .auth_strategy_for(crate::profile::CredentialKind::ApiKey)
+                    .cloned()
+                    .unwrap_or(crate::profile::AuthStrategy::BearerToken),
+            )
             .with_quirks(profile.quirks.clone());
 
         if let Some(timeout) = runtime.connect_timeout {
@@ -140,6 +171,14 @@ impl Provider for GenericProvider {
                 let profile = Arc::clone(&self.profile);
                 Box::pin(async move { crate::anthropic::infer(client, &profile, request).await })
             }
+            ApiFamily::CodexResponses => {
+                let client = self.http_client.clone();
+                let runtime = self.runtime.clone();
+                let profile = Arc::clone(&self.profile);
+                Box::pin(
+                    async move { crate::codex::infer(client, &profile, &runtime, request).await },
+                )
+            }
         }
     }
 
@@ -169,6 +208,14 @@ impl Provider for GenericProvider {
                 Box::pin(
                     async move { crate::anthropic::infer_stream(client, &profile, request).await },
                 )
+            }
+            ApiFamily::CodexResponses => {
+                let client = self.http_client.clone();
+                let runtime = self.runtime.clone();
+                let profile = Arc::clone(&self.profile);
+                Box::pin(async move {
+                    crate::codex::infer_stream(client, &profile, &runtime, request).await
+                })
             }
         }
     }

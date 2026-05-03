@@ -23,6 +23,7 @@ tracing = "0.1"
 futures = "0.3"
 pin-project = "1"
 reqwest = { version = "0.13", features = ["json", "stream"] }
+base64 = "0.22"
 
 # OpenAI SDK - enable features for Responses API
 async-openai = { version = "0.36", features = ["responses", "response-types", "_api"] }

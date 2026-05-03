@@ -148,9 +148,10 @@ pub(crate) fn build_client(config: &OpenAiConfig) -> ProviderResult<Client<OpenA
         .as_ref()
         .unwrap_or(&AuthStrategy::BearerToken);
 
+    let credential = crate::profile::ProviderCredential::ApiKey(config.api_key.clone());
     let http_client = build_http_client(HttpClientParams {
         context: "OpenAI client",
-        api_key: &config.api_key,
+        credential: &credential,
         auth_strategy: strategy,
         default_headers: &config.default_headers,
         extra_headers: &[],

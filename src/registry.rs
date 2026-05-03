@@ -1,5 +1,8 @@
 use crate::{
-    profile::{ApiFamily, AuthStrategy, EndpointPurpose, ProviderProfile, RuntimeConfig},
+    profile::{
+        ApiFamily, AuthStrategy, CredentialAuthConfig, CredentialKind, EndpointPurpose,
+        ProviderProfile, RuntimeConfig,
+    },
     provider::Provider,
     ProviderError, ProviderResult,
 };
@@ -163,6 +166,7 @@ impl ProviderRegistry {
             .with_auth(AuthStrategy::ApiKeyHeader {
                 header_name: "x-api-key".into(),
             })
+            .with_credential_auth(CredentialKind::OAuthBearer, AuthStrategy::BearerToken)
             .with_purpose(EndpointPurpose::Coding),
         );
 
@@ -184,6 +188,21 @@ impl ProviderRegistry {
             ApiFamily::OpenAiChatCompletions,
             "https://api.requesty.ai/v1",
         ));
+
+        {
+            let mut codex = ProviderProfile::new(
+                "codex",
+                ApiFamily::CodexResponses,
+                "https://chatgpt.com/backend-api/codex",
+            )
+            .with_models_dev_id("openai")
+            .with_purpose(EndpointPurpose::Coding);
+            codex.credential_auth = vec![CredentialAuthConfig {
+                kind: CredentialKind::OAuthBearer,
+                auth_strategy: AuthStrategy::BearerToken,
+            }];
+            self.register(codex);
+        }
     }
 }
 
@@ -198,6 +217,8 @@ impl Default for ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProviderCredential;
+    use std::time::SystemTime;
 
     #[test]
     fn test_register_and_get() {
@@ -242,6 +263,7 @@ mod tests {
         assert!(slugs.contains(&"kimi-code"));
         assert!(slugs.contains(&"openrouter"));
         assert!(slugs.contains(&"requesty"));
+        assert!(slugs.contains(&"codex"));
     }
 
     #[test]
@@ -273,10 +295,10 @@ mod tests {
         assert_eq!(kimi_code.slug, "kimi-code");
         assert_eq!(kimi_code.family, ApiFamily::AnthropicMessages);
         assert_eq!(
-            kimi_code.auth_strategy,
-            AuthStrategy::ApiKeyHeader {
+            kimi_code.auth_strategy_for(CredentialKind::ApiKey),
+            Some(&AuthStrategy::ApiKeyHeader {
                 header_name: "x-api-key".into()
-            }
+            })
         );
         assert_eq!(kimi_code.purpose, EndpointPurpose::Coding);
         assert_eq!(zai.slug, "zai");
@@ -387,6 +409,76 @@ mod tests {
                 !fragment.contains("{#"),
                 "fragment should not contain Tera comment delimiter"
             );
+        }
+    }
+
+    #[test]
+    fn test_codex_profile_registered() {
+        let registry = ProviderRegistry::default();
+        let codex = registry.get("codex", RuntimeConfig::new("test-key"));
+        // codex rejects API-key credentials
+        assert!(codex.is_err());
+        if let Err(ref e) = codex {
+            let msg = e.to_string();
+            assert!(msg.contains("codex"));
+            assert!(msg.contains("does not support"));
+        }
+    }
+
+    #[test]
+    fn test_codex_profile_metadata() {
+        let registry = ProviderRegistry::default();
+        let profile = registry
+            .resolve_by_models_dev_id("openai")
+            .expect("codex uses models_dev_id = openai");
+        assert_eq!(profile.slug, "codex");
+        assert_eq!(profile.family, ApiFamily::CodexResponses);
+        assert_eq!(profile.purpose, EndpointPurpose::Coding);
+        assert!(profile.supports_credential(CredentialKind::OAuthBearer));
+        assert!(!profile.supports_credential(CredentialKind::ApiKey));
+    }
+
+    #[test]
+    fn test_kimi_code_supports_both_credentials() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.profiles.get("kimi-code").unwrap();
+        assert!(profile.supports_credential(CredentialKind::ApiKey));
+        assert!(profile.supports_credential(CredentialKind::OAuthBearer));
+    }
+
+    #[test]
+    fn test_kimi_rejects_oauth() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get(
+            "kimi",
+            RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+                access_token: "tok".into(),
+                expires_at: None,
+                id_token: None,
+            }),
+        );
+        assert!(result.is_err());
+        if let Err(ref e) = result {
+            let msg = e.to_string();
+            assert!(msg.contains("kimi"));
+            assert!(msg.contains("does not support"));
+        }
+    }
+
+    #[test]
+    fn test_expired_oauth_fails() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get(
+            "codex",
+            RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+                access_token: "tok".into(),
+                expires_at: Some(SystemTime::UNIX_EPOCH),
+                id_token: None,
+            }),
+        );
+        assert!(result.is_err());
+        if let Err(ref e) = result {
+            assert!(e.to_string().contains("expired"));
         }
     }
 }

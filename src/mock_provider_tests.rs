@@ -25,10 +25,17 @@ fn build_test_client(
     runtime: &RuntimeConfig,
 ) -> crate::ProviderResult<reqwest::Client> {
     let context = format!("test profile '{}'", profile.slug);
+    let kind = runtime.credential.kind();
+    let auth_strategy = profile.auth_strategy_for(kind).ok_or_else(|| {
+        crate::ProviderError::auth(format!(
+            "Provider '{}' does not support {:?} credentials",
+            profile.slug, kind
+        ))
+    })?;
     build_http_client(HttpClientParams {
         context: &context,
-        api_key: &runtime.api_key,
-        auth_strategy: &profile.auth_strategy,
+        credential: &runtime.credential,
+        auth_strategy,
         default_headers: &profile.default_headers,
         extra_headers: &[],
         connect_timeout: runtime.effective_connect_timeout(),
