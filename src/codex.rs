@@ -289,6 +289,9 @@ struct CodexResponse {
 
 #[derive(Debug, Deserialize)]
 struct CodexOutputItem {
+    id: Option<String>,
+    call_id: Option<String>,
+    name: Option<String>,
     #[serde(rename = "type")]
     kind: String,
     content: Option<Vec<CodexContentBlock>>,
@@ -337,11 +340,16 @@ fn parse_codex_response(data: CodexResponse) -> ProviderResult<Vec<ProviderEvent
                 }
                 "function_call" => {
                     if let Some(args) = item.arguments {
+                        let arguments =
+                            serde_json::from_str(&args).unwrap_or(serde_json::Value::String(args));
                         events.push(ProviderEvent::ToolCall {
                             call: ToolCall {
-                                call_id: "codex-call".to_string(),
-                                tool_name: "function".to_string(),
-                                arguments: serde_json::Value::String(args),
+                                call_id: item
+                                    .call_id
+                                    .or(item.id)
+                                    .unwrap_or_else(|| "codex-call".to_string()),
+                                tool_name: item.name.unwrap_or_else(|| "function".to_string()),
+                                arguments,
                             },
                         });
                     }
@@ -358,6 +366,11 @@ fn parse_codex_response(data: CodexResponse) -> ProviderResult<Vec<ProviderEvent
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        generic_provider::GenericProvider, profile::CredentialKind, provider::Provider,
+        AuthStrategy, Message, Transcript,
+    };
+    use mockito::Matcher;
 
     fn fake_jwt(payload: &str) -> String {
         use base64::{engine::general_purpose, Engine as _};
@@ -365,6 +378,12 @@ mod tests {
         let payload_b64 = general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
         let sig = general_purpose::URL_SAFE_NO_PAD.encode(b"signature");
         format!("{}.{}.{}", header, payload_b64, sig)
+    }
+
+    fn codex_profile(base_url: &str) -> ProviderProfile {
+        ProviderProfile::new("codex", crate::ApiFamily::CodexResponses, base_url)
+            .with_models_dev_id("openai")
+            .with_credential_auth(CredentialKind::OAuthBearer, AuthStrategy::BearerToken)
     }
 
     #[test]
@@ -460,5 +479,129 @@ mod tests {
         assert!(headers
             .iter()
             .any(|(k, v)| k == "chatgpt-account-id" && v == "acct_abc"));
+    }
+
+    #[test]
+    fn test_parse_codex_response_preserves_tool_call_metadata() {
+        let response = CodexResponse {
+            output: Some(vec![CodexOutputItem {
+                id: Some("fc_123".into()),
+                call_id: Some("call_123".into()),
+                name: Some("lookup".into()),
+                kind: "function_call".into(),
+                content: None,
+                arguments: Some(r#"{"query":"rust"}"#.into()),
+            }]),
+            error: None,
+        };
+
+        let events = parse_codex_response(response).unwrap();
+        let tool_call = events
+            .iter()
+            .find_map(|event| match event {
+                ProviderEvent::ToolCall { call } => Some(call),
+                _ => None,
+            })
+            .expect("tool call");
+
+        assert_eq!(tool_call.call_id, "call_123");
+        assert_eq!(tool_call.tool_name, "lookup");
+        assert_eq!(tool_call.arguments["query"], "rust");
+    }
+
+    #[tokio::test]
+    async fn test_codex_infer_sends_required_url_headers_and_body() {
+        let mut server = mockito::Server::new_async().await;
+        let id_token = fake_jwt(r#"{"chatgpt_account_id":"acct_abc"}"#);
+
+        let mock = server
+            .mock("POST", "/responses")
+            .match_header("authorization", "Bearer codex-token")
+            .match_header("originator", "iron-providers")
+            .match_header(
+                "user-agent",
+                format!("iron-providers/{}", env!("CARGO_PKG_VERSION")).as_str(),
+            )
+            .match_header("chatgpt-account-id", "acct_abc")
+            .match_body(Matcher::PartialJson(json!({
+                "model": "gpt-5.5",
+                "store": false,
+                "reasoning": { "effort": "medium" },
+                "parallel_tool_calls": true,
+                "stream": false,
+                "instructions": "Be terse"
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}"#,
+            )
+            .create_async()
+            .await;
+
+        let runtime = RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+            access_token: "codex-token".into(),
+            expires_at: None,
+            id_token: Some(id_token),
+        });
+        let provider =
+            GenericProvider::from_profile(codex_profile(&server.url()), runtime).unwrap();
+        let request = InferenceRequest::new(
+            "gpt-5.5",
+            Transcript::with_messages(vec![Message::user("hello")]),
+        )
+        .with_instructions("Be terse");
+
+        let events = provider.infer(request).await.unwrap();
+        mock.assert_async().await;
+
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::Output { content } if content == "ok")));
+    }
+
+    #[tokio::test]
+    async fn test_codex_stream_sends_stream_true_and_parses_sse() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server
+            .mock("POST", "/responses")
+            .match_header("authorization", "Bearer codex-token")
+            .match_header("chatgpt-account-id", Matcher::Missing)
+            .match_body(Matcher::PartialJson(json!({
+                "model": "gpt-5.5",
+                "store": false,
+                "reasoning": { "effort": "medium" },
+                "parallel_tool_calls": true,
+                "stream": true
+            })))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body("data: {\"delta\":\"hi\"}\n\ndata: [DONE]\n\n")
+            .create_async()
+            .await;
+
+        let runtime = RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+            access_token: "codex-token".into(),
+            expires_at: None,
+            id_token: None,
+        });
+        let provider =
+            GenericProvider::from_profile(codex_profile(&server.url()), runtime).unwrap();
+        let request = InferenceRequest::new(
+            "gpt-5.5",
+            Transcript::with_messages(vec![Message::user("hello")]),
+        );
+
+        let stream = provider.infer_stream(request).await.unwrap();
+        let events: Vec<_> = stream.collect().await;
+        mock.assert_async().await;
+
+        assert!(events.iter().any(
+            |event| matches!(event, Ok(ProviderEvent::Output { content }) if content == "hi")
+        ));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Ok(ProviderEvent::Complete))));
     }
 }

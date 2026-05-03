@@ -466,6 +466,35 @@ mod tests {
     }
 
     #[test]
+    fn test_blank_api_key_fails_during_registry_construction() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get("zai", RuntimeConfig::new("   "));
+        assert!(result.is_err());
+        if let Err(ref e) = result {
+            assert!(e.is_authentication());
+            assert!(e.to_string().contains("API key is required"));
+        }
+    }
+
+    #[test]
+    fn test_blank_oauth_token_fails_during_registry_construction() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get(
+            "codex",
+            RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+                access_token: "   ".into(),
+                expires_at: None,
+                id_token: None,
+            }),
+        );
+        assert!(result.is_err());
+        if let Err(ref e) = result {
+            assert!(e.is_authentication());
+            assert!(e.to_string().contains("OAuth access token is required"));
+        }
+    }
+
+    #[test]
     fn test_expired_oauth_fails() {
         let registry = ProviderRegistry::default();
         let result = registry.get(

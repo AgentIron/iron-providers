@@ -57,6 +57,8 @@ impl GenericProvider {
 
     /// Shared construction logic that builds the HTTP client(s) once.
     fn build(profile: Arc<ProviderProfile>, runtime: RuntimeConfig) -> ProviderResult<Self> {
+        runtime.validate()?;
+
         let context = format!("profile '{}'", profile.slug);
 
         // Validate credential kind is supported by this profile.
