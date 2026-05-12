@@ -1,0 +1,154 @@
+{
+  "/home/pmooring/src/AgentIron/iron-providers/tasks.py": {
+    "mtime": 1775962125.9673955,
+    "hash": "67cefd0928382aed226afbe744bbce35"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/error.rs": {
+    "mtime": 1776656955.9433947,
+    "hash": "589e1ff5b38181933cb91f81459f4d26"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/model.rs": {
+    "mtime": 1776657821.3699808,
+    "hash": "6fb12a84956a16939612ad063966eace"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/provider.rs": {
+    "mtime": 1776655314.3110595,
+    "hash": "5c03325517dc8e405556bb5bdf1cb7a6"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/sse.rs": {
+    "mtime": 1776655091.4420836,
+    "hash": "be95593f135a0740793a55d1398c9288"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/stream_util.rs": {
+    "mtime": 1776656732.1968694,
+    "hash": "22b67f89873be2535ddf4d885fe6426e"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/anthropic.rs": {
+    "mtime": 1777955276.3874173,
+    "hash": "039e82f803dba63470ab97388ca08850"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/codex.rs": {
+    "mtime": 1777955276.3874173,
+    "hash": "f2247311f4b3a58bd477a4d798d0dcbd"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/completions.rs": {
+    "mtime": 1777955276.3874173,
+    "hash": "0831370f74fb88223a174fa1a5893f53"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/generic_provider.rs": {
+    "mtime": 1777955276.3881698,
+    "hash": "32ac76a4e4d475f7230d6bbc02abd1ae"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/http_client.rs": {
+    "mtime": 1777955276.3881698,
+    "hash": "d21a9b500b658a3ecdbd4b77abe1ec63"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/lib.rs": {
+    "mtime": 1777955276.3881698,
+    "hash": "e361522cbb7e8b2b51ad0abf6d0508f8"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/mock_provider_tests.rs": {
+    "mtime": 1777955276.3881698,
+    "hash": "6aa626d9435180dd9358f929a257d4c5"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/openai.rs": {
+    "mtime": 1777955276.3881698,
+    "hash": "05d365e257a79d082ed9c4269120df81"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/profile.rs": {
+    "mtime": 1777955276.3881698,
+    "hash": "6f8265f41a7b87c44f471a28458c5d56"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/registry.rs": {
+    "mtime": 1777955276.38917,
+    "hash": "30ee1989aa6a9a9433584d7fd7c9d455"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/tests/error_tests.rs": {
+    "mtime": 1775962125.9673955,
+    "hash": "3a2a3af64e3088bab2ff7a11d9e3c34b"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/tests/model_tests.rs": {
+    "mtime": 1776650198.2697039,
+    "hash": "d9a9ba6a9938120f26c6754ae04f4d9f"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/tests/streaming_tests.rs": {
+    "mtime": 1776657288.6016371,
+    "hash": "f98e500b66cba994cd71cf95ef179488"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/tests/responses_api_tests.rs": {
+    "mtime": 1776652472.929086,
+    "hash": "ba6e0ab357473332079ab307104cb444"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/README.md": {
+    "mtime": 1777955276.38617,
+    "hash": "0cbb27fa6fd843fba24e57026b4d7e7e"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/AGENTS.md": {
+    "mtime": 1778555830.807441,
+    "hash": "da79aa9343cd2b362206f03762160abc"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/config.yaml": {
+    "mtime": 1775962125.9672043,
+    "hash": "9e3e7672b387a282583011181ab35f9a"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/archive/2026-04-09-fix-chat-completions-stream-tool-call-assembly/design.md": {
+    "mtime": 1775962125.967128,
+    "hash": "c833502ca8f483a1357bef54d5b94105"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/archive/2026-04-09-fix-chat-completions-stream-tool-call-assembly/proposal.md": {
+    "mtime": 1775962125.967128,
+    "hash": "d38241f2bbf5f4517dc448dfd7fe4053"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/archive/2026-04-09-fix-chat-completions-stream-tool-call-assembly/tasks.md": {
+    "mtime": 1775962125.9672043,
+    "hash": "abaf66d3325ce0e13e927ef0ed5fe193"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/archive/2026-04-09-fix-chat-completions-stream-tool-call-assembly/specs/chat-completions-stream-assembly/spec.md": {
+    "mtime": 1775962125.9672043,
+    "hash": "b7efd0f5f7657e7d8c2c113e0a2dd691"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/add-provider-system-prompt-fragments/design.md": {
+    "mtime": 1777611621.7300615,
+    "hash": "e26286b371e146bfd5b5cde2d5927558"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/add-provider-system-prompt-fragments/proposal.md": {
+    "mtime": 1777611621.7300615,
+    "hash": "7366ab9328e99d0f534c0d877bfd2db5"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/add-provider-system-prompt-fragments/tasks.md": {
+    "mtime": 1777611621.7304711,
+    "hash": "caf151b5cf40e82df3181e0dc330fd96"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/add-provider-system-prompt-fragments/specs/provider-system-prompt-fragments/spec.md": {
+    "mtime": 1777611621.7304711,
+    "hash": "54f528535c50af83ac782687a6714d79"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/add-provider-credential-oauth/design.md": {
+    "mtime": 1777955276.3870044,
+    "hash": "b10650510d68c3b6345d14e892b54915"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/add-provider-credential-oauth/proposal.md": {
+    "mtime": 1777955276.3870044,
+    "hash": "0f5bb060f55b49740cd74b0f2874c7b1"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/add-provider-credential-oauth/tasks.md": {
+    "mtime": 1777955276.3874173,
+    "hash": "6ff533094e8580a904e19f86f6f6f09c"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/add-provider-credential-oauth/specs/provider-credential-oauth/spec.md": {
+    "mtime": 1777955276.3874173,
+    "hash": "3e6a6b94ab0d615f330a7b1cd4403b32"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/specs/chat-completions-stream-assembly/spec.md": {
+    "mtime": 1775962125.9672813,
+    "hash": "b7efd0f5f7657e7d8c2c113e0a2dd691"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/system_prompt_fragments/anthropic.md": {
+    "mtime": 1777611621.7304711,
+    "hash": "7ba8a019ff556f3811b2a936b52cdf9a"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/system_prompt_fragments/openai.md": {
+    "mtime": 1777611621.7311916,
+    "hash": "192562dcb04fb201d680fa382f566241"
+  }
+}

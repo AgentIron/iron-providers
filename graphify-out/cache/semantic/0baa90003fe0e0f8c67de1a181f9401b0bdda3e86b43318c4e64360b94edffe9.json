@@ -1,0 +1,1 @@
+{"nodes": [{"id": "spf_anthropic", "label": "Anthropic system prompt fragment", "file_type": "document", "source_file": "src/system_prompt_fragments/anthropic.md", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}
