@@ -26,7 +26,7 @@ reqwest = { version = "0.13", features = ["json", "stream"] }
 base64 = "0.22"
 
 # OpenAI SDK - enable features for Responses API
-async-openai = { version = "0.36", features = ["responses", "response-types", "_api"] }
+async-openai = { version = "0.38", features = ["responses", "response-types", "_api"] }
 
 # Stream utilities
 async-stream = "0.3"
