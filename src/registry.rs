@@ -160,7 +160,7 @@ impl ProviderRegistry {
             ProviderProfile::new(
                 "kimi-code",
                 ApiFamily::AnthropicMessages,
-                "https://api.kimi.com/coding/v1",
+                "https://api.kimi.com/coding",
             )
             .with_models_dev_id("kimi-for-coding")
             .with_auth(AuthStrategy::ApiKeyHeader {
@@ -444,6 +444,7 @@ mod tests {
         let profile = registry.profiles.get("kimi-code").unwrap();
         assert!(profile.supports_credential(CredentialKind::ApiKey));
         assert!(profile.supports_credential(CredentialKind::OAuthBearer));
+        assert_eq!(profile.base_url, "https://api.kimi.com/coding");
     }
 
     #[test]
