@@ -27,6 +27,11 @@ pub(crate) fn chatgpt_account_id_from_jwt(id_token: &str) -> Option<String> {
         .and_then(|v| v.as_str().map(String::from))
         .or_else(|| {
             payload
+                .get("https://api.openai.com/auth.chatgpt_account_id")
+                .and_then(|v| v.as_str().map(String::from))
+        })
+        .or_else(|| {
+            payload
                 .get("https://api.openai.com/auth")
                 .and_then(|nested| nested.get("chatgpt_account_id"))
                 .and_then(|v| v.as_str().map(String::from))
@@ -63,10 +68,12 @@ fn build_codex_headers(
     ];
 
     if let ProviderCredential::OAuthBearer {
-        id_token: Some(ref token),
+        access_token,
+        id_token,
         ..
-    } = runtime.credential
+    } = &runtime.credential
     {
+        let token = id_token.as_deref().unwrap_or(access_token);
         if let Some(account_id) = chatgpt_account_id_from_jwt(token) {
             headers.push(("chatgpt-account-id".to_string(), account_id));
         }
@@ -407,6 +414,16 @@ mod tests {
     }
 
     #[test]
+    fn test_jwt_flat_namespaced_account_id() {
+        let payload = r#"{"https://api.openai.com/auth.chatgpt_account_id":"acct_namespaced"}"#;
+        let jwt = fake_jwt(payload);
+        assert_eq!(
+            chatgpt_account_id_from_jwt(&jwt),
+            Some("acct_namespaced".to_string())
+        );
+    }
+
+    #[test]
     fn test_jwt_organization_fallback() {
         let payload = r#"{"organizations":[{"id":"org_789"}]}"#;
         let jwt = fake_jwt(payload);
@@ -479,6 +496,21 @@ mod tests {
         assert!(headers
             .iter()
             .any(|(k, v)| k == "chatgpt-account-id" && v == "acct_abc"));
+    }
+
+    #[test]
+    fn test_build_codex_headers_with_namespaced_account_id_from_access_token() {
+        let access_token =
+            fake_jwt(r#"{"https://api.openai.com/auth.chatgpt_account_id":"acct_from_access"}"#);
+        let runtime = RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+            access_token,
+            expires_at: None,
+            id_token: None,
+        });
+        let headers = build_codex_headers(&runtime, "0.1.8").unwrap();
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "chatgpt-account-id" && v == "acct_from_access"));
     }
 
     #[test]
