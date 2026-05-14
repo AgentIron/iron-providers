@@ -102,7 +102,7 @@ fn build_codex_request_body(request: &InferenceRequest, stream: bool) -> Provide
         .iter()
         .map(|msg| match msg {
             crate::Message::User { content } => {
-                json!({ "role": "user", "content": [{"type": "text", "text": content}] })
+                json!({ "role": "user", "content": [{"type": "input_text", "text": content}] })
             }
             crate::Message::Assistant { content } => {
                 json!({ "role": "assistant", "content": content })
@@ -464,6 +464,19 @@ mod tests {
     }
 
     #[test]
+    fn test_build_codex_request_body_uses_input_text_blocks() {
+        let request = InferenceRequest::new(
+            "gpt-5.5",
+            Transcript::with_messages(vec![Message::user("hello")]),
+        );
+        let body = build_codex_request_body(&request, false).unwrap();
+
+        assert_eq!(body["input"][0]["role"], "user");
+        assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(body["input"][0]["content"][0]["text"], "hello");
+    }
+
+    #[test]
     fn test_build_codex_request_body_stream() {
         let request = InferenceRequest::new("gpt-5.3-codex", crate::Transcript::new());
         let body = build_codex_request_body(&request, true).unwrap();
@@ -561,6 +574,7 @@ mod tests {
                 "reasoning": { "effort": "medium" },
                 "parallel_tool_calls": true,
                 "stream": false,
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
                 "instructions": "Be terse"
             })))
             .with_status(200)
@@ -605,7 +619,8 @@ mod tests {
                 "store": false,
                 "reasoning": { "effort": "medium" },
                 "parallel_tool_calls": true,
-                "stream": true
+                "stream": true,
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
             })))
             .with_status(200)
             .with_header("content-type", "text/event-stream")
