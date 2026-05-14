@@ -500,9 +500,8 @@ mod tests {
 
     #[test]
     fn test_build_codex_headers_with_namespaced_account_id_from_access_token() {
-        let access_token = fake_jwt(
-            r#"{"https://api.openai.com/auth.chatgpt_account_id":"acct_from_access"}"#,
-        );
+        let access_token =
+            fake_jwt(r#"{"https://api.openai.com/auth.chatgpt_account_id":"acct_from_access"}"#);
         let runtime = RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
             access_token,
             expires_at: None,
