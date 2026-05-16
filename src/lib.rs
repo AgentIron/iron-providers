@@ -3,12 +3,12 @@
     rustdoc::private_intra_doc_links,
     rustdoc::redundant_explicit_links
 )]
-//! iron-providers: Semantic provider boundary with multi-provider support
+//! iron-providers: Semantic provider boundary for protocol-oriented LLM providers
 //!
 //! This crate provides a function-oriented provider API that normalizes
 //! inference requests and responses across different LLM backends.
-//! Supports OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages
-//! API families via a profile-driven generic provider and registry.
+//! Supports Responses, Chat Completions, and Messages protocol families via a
+//! profile-driven provider connection and registry.
 //!
 //! # Architecture
 //!
@@ -36,8 +36,12 @@
 //!
 //! - **[`ProviderProfile`]**: Declarative provider configuration including
 //!   API family, base URL, auth strategy, default headers, and quirks.
-//!   All provider families (OpenAI Responses, Chat Completions, Anthropic)
+//!   All provider families (Responses, Chat Completions, Messages)
 //!   honor the full profile model consistently.
+//!
+//! - **[`ProviderConnection`]**: Resolved provider state that implements
+//!   [`Provider`]. Construct directly from a [`ProviderProfile`] and
+//!   [`RuntimeConfig`], or obtain from [`ProviderRegistry::get`].
 //!
 //! - **[`ProviderRegistry`]**: Registry for looking up providers by slug or
 //!   URL pattern, with built-in profiles for common providers.
@@ -48,25 +52,25 @@
 //! not by a field on the request. There is no `stream` field on
 //! [`InferenceRequest`].
 
-pub mod anthropic;
-pub mod codex;
-pub mod completions;
+pub mod connection;
 pub mod error;
-pub mod generic_provider;
-pub(crate) mod http_client;
 pub mod model;
-pub mod openai;
 pub mod profile;
 pub mod provider;
 pub mod registry;
+
+pub(crate) mod apis;
+pub(crate) mod auth;
+pub(crate) mod http_client;
+pub(crate) mod provider_overrides;
 pub(crate) mod sse;
 pub(crate) mod stream_util;
 
 #[cfg(test)]
 mod mock_provider_tests;
 
+pub use connection::ProviderConnection;
 pub use error::{ProviderError, ProviderResult};
-pub use generic_provider::GenericProvider;
 pub use model::{
     ChoiceItem, ChoiceRequest, ChoiceSelectionMode, GenerationConfig, InferenceContext,
     InferenceRequest, Message, ProviderEvent, RuntimeRecord, ToolCall, ToolDefinition, ToolPolicy,
@@ -76,18 +80,15 @@ pub use profile::{
     ApiFamily, AuthStrategy, CredentialAuthConfig, CredentialKind, EndpointPurpose,
     ProviderCredential, ProviderProfile, ProviderQuirks, RuntimeConfig, RuntimeConfigSource,
 };
-pub use provider::{OpenAiProvider, Provider, ProviderFuture};
+pub use provider::{Provider, ProviderFuture};
 pub use registry::ProviderRegistry;
-
-pub use openai::{OpenAiConfig, OpenAiConfigSource};
 
 pub mod prelude {
     pub use crate::{
         ApiFamily, AuthStrategy, ChoiceItem, ChoiceRequest, ChoiceSelectionMode, CredentialKind,
-        EndpointPurpose, GenerationConfig, GenericProvider, InferenceContext, InferenceRequest,
-        Message, OpenAiConfig, OpenAiConfigSource, OpenAiProvider, Provider, ProviderCredential,
-        ProviderError, ProviderEvent, ProviderProfile, ProviderRegistry, ProviderResult,
-        RuntimeConfig, RuntimeConfigSource, RuntimeRecord, ToolCall, ToolDefinition, ToolPolicy,
-        Transcript, CHOICE_REQUEST_TOOL_NAME,
+        EndpointPurpose, GenerationConfig, InferenceContext, InferenceRequest, Message, Provider,
+        ProviderCredential, ProviderError, ProviderEvent, ProviderProfile, ProviderRegistry,
+        ProviderResult, RuntimeConfig, RuntimeConfigSource, RuntimeRecord, ToolCall,
+        ToolDefinition, ToolPolicy, Transcript, CHOICE_REQUEST_TOOL_NAME,
     };
 }

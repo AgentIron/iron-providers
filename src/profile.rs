@@ -13,10 +13,9 @@ pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ApiFamily {
-    OpenAiResponses,
-    OpenAiChatCompletions,
-    AnthropicMessages,
-    CodexResponses,
+    Responses,
+    Completions,
+    Messages,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -187,11 +186,10 @@ impl ProviderProfile {
 
     pub fn system_prompt_fragment(&self) -> &'static str {
         match self.family {
-            ApiFamily::AnthropicMessages => crate::anthropic::SYSTEM_PROMPT_FRAGMENT,
-            ApiFamily::OpenAiResponses | ApiFamily::OpenAiChatCompletions => {
-                crate::openai::SYSTEM_PROMPT_FRAGMENT
+            ApiFamily::Messages => crate::apis::messages::SYSTEM_PROMPT_FRAGMENT,
+            ApiFamily::Responses | ApiFamily::Completions => {
+                crate::apis::completions::SYSTEM_PROMPT_FRAGMENT
             }
-            ApiFamily::CodexResponses => crate::openai::SYSTEM_PROMPT_FRAGMENT,
         }
     }
 }
@@ -328,11 +326,7 @@ mod tests {
 
     #[test]
     fn test_profile_default_auth_is_api_key_bearer() {
-        let profile = ProviderProfile::new(
-            "test",
-            ApiFamily::OpenAiChatCompletions,
-            "https://example.com",
-        );
+        let profile = ProviderProfile::new("test", ApiFamily::Completions, "https://example.com");
         assert!(profile.supports_credential(CredentialKind::ApiKey));
         assert!(!profile.supports_credential(CredentialKind::OAuthBearer));
         assert_eq!(
@@ -343,23 +337,18 @@ mod tests {
 
     #[test]
     fn test_profile_with_credential_auth() {
-        let profile = ProviderProfile::new(
-            "test",
-            ApiFamily::OpenAiChatCompletions,
-            "https://example.com",
-        )
-        .with_credential_auth(CredentialKind::OAuthBearer, AuthStrategy::BearerToken);
+        let profile = ProviderProfile::new("test", ApiFamily::Completions, "https://example.com")
+            .with_credential_auth(CredentialKind::OAuthBearer, AuthStrategy::BearerToken);
         assert!(profile.supports_credential(CredentialKind::ApiKey));
         assert!(profile.supports_credential(CredentialKind::OAuthBearer));
     }
 
     #[test]
     fn test_profile_with_auth_replaces_api_key_config() {
-        let profile =
-            ProviderProfile::new("test", ApiFamily::AnthropicMessages, "https://example.com")
-                .with_auth(AuthStrategy::ApiKeyHeader {
-                    header_name: "x-api-key".into(),
-                });
+        let profile = ProviderProfile::new("test", ApiFamily::Messages, "https://example.com")
+            .with_auth(AuthStrategy::ApiKeyHeader {
+                header_name: "x-api-key".into(),
+            });
         assert_eq!(
             profile.auth_strategy_for(CredentialKind::ApiKey),
             Some(&AuthStrategy::ApiKeyHeader {

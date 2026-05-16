@@ -1,11 +1,11 @@
 [package]
 name = "iron-providers"
-version = "0.1.13"
+version = "0.2.0"
 edition = "2021"
 authors = ["Paul Mooring"]
 license = "Apache-2.0"
 rust-version = "1.91"
-description = "Semantic provider boundary with OpenAI Responses API support"
+description = "Semantic provider boundary for protocol-oriented LLM providers"
 readme = "README.md"
 repository = "https://github.com/AgentIron/iron-providers"
 exclude = [
@@ -24,9 +24,6 @@ futures = "0.3"
 pin-project = "1"
 reqwest = { version = "0.13", features = ["json", "stream"] }
 base64 = "0.22"
-
-# OpenAI SDK - enable features for Responses API
-async-openai = { version = "0.38", features = ["responses", "response-types", "_api"] }
 
 # Stream utilities
 async-stream = "0.3"

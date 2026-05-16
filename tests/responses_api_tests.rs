@@ -1,25 +1,9 @@
 //! Tests for OpenAI Responses API integration
 
 use iron_providers::{
-    GenerationConfig, InferenceRequest, Message, OpenAiConfig, ToolDefinition, ToolPolicy,
-    Transcript,
+    GenerationConfig, InferenceRequest, Message, ToolDefinition, ToolPolicy, Transcript,
 };
 use serde_json::json;
-
-#[test]
-fn test_openai_config_new() {
-    let config = OpenAiConfig::new("test-key".to_string());
-    assert_eq!(config.api_key, "test-key");
-    assert!(config.base_url.is_none());
-}
-
-#[test]
-fn test_openai_config_builder() {
-    let config = OpenAiConfig::new("test-key".to_string())
-        .with_base_url("https://custom.api.com".to_string());
-
-    assert_eq!(config.base_url, Some("https://custom.api.com".to_string()));
-}
 
 #[test]
 fn test_inference_request_with_instructions() {

@@ -12,8 +12,8 @@
     "hash": "6fb12a84956a16939612ad063966eace"
   },
   "/home/pmooring/src/AgentIron/iron-providers/src/provider.rs": {
-    "mtime": 1776655314.3110595,
-    "hash": "5c03325517dc8e405556bb5bdf1cb7a6"
+    "mtime": 1778911520.6572442,
+    "hash": "e107331c6ff6622cfd178067b45f1ece"
   },
   "/home/pmooring/src/AgentIron/iron-providers/src/sse.rs": {
     "mtime": 1776655091.4420836,
@@ -23,45 +23,53 @@
     "mtime": 1776656732.1968694,
     "hash": "22b67f89873be2535ddf4d885fe6426e"
   },
-  "/home/pmooring/src/AgentIron/iron-providers/src/anthropic.rs": {
-    "mtime": 1777955276.3874173,
-    "hash": "039e82f803dba63470ab97388ca08850"
-  },
-  "/home/pmooring/src/AgentIron/iron-providers/src/codex.rs": {
-    "mtime": 1777955276.3874173,
-    "hash": "f2247311f4b3a58bd477a4d798d0dcbd"
-  },
-  "/home/pmooring/src/AgentIron/iron-providers/src/completions.rs": {
-    "mtime": 1777955276.3874173,
-    "hash": "0831370f74fb88223a174fa1a5893f53"
-  },
-  "/home/pmooring/src/AgentIron/iron-providers/src/generic_provider.rs": {
-    "mtime": 1777955276.3881698,
-    "hash": "32ac76a4e4d475f7230d6bbc02abd1ae"
-  },
   "/home/pmooring/src/AgentIron/iron-providers/src/http_client.rs": {
-    "mtime": 1777955276.3881698,
-    "hash": "d21a9b500b658a3ecdbd4b77abe1ec63"
+    "mtime": 1778912296.521911,
+    "hash": "d2993f0655e64cbaccc5e44a07d909c8"
   },
   "/home/pmooring/src/AgentIron/iron-providers/src/lib.rs": {
-    "mtime": 1777955276.3881698,
-    "hash": "e361522cbb7e8b2b51ad0abf6d0508f8"
-  },
-  "/home/pmooring/src/AgentIron/iron-providers/src/mock_provider_tests.rs": {
-    "mtime": 1777955276.3881698,
-    "hash": "6aa626d9435180dd9358f929a257d4c5"
-  },
-  "/home/pmooring/src/AgentIron/iron-providers/src/openai.rs": {
-    "mtime": 1777955276.3881698,
-    "hash": "05d365e257a79d082ed9c4269120df81"
-  },
-  "/home/pmooring/src/AgentIron/iron-providers/src/profile.rs": {
-    "mtime": 1777955276.3881698,
-    "hash": "6f8265f41a7b87c44f471a28458c5d56"
+    "mtime": 1778913938.6195815,
+    "hash": "545d9a9d82d2c786b64cc57263674e1f"
   },
   "/home/pmooring/src/AgentIron/iron-providers/src/registry.rs": {
-    "mtime": 1777955276.38917,
-    "hash": "30ee1989aa6a9a9433584d7fd7c9d455"
+    "mtime": 1778912296.530911,
+    "hash": "54a282a2a6ad99c4f8db3521415848da"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/auth.rs": {
+    "mtime": 1778912296.5209107,
+    "hash": "090ec02917b5ac4ca814afa345db0659"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/profile.rs": {
+    "mtime": 1778912296.527911,
+    "hash": "be0a7aea438a5858281a0f1b15dabe1c"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/mock_provider_tests.rs": {
+    "mtime": 1778914046.3483238,
+    "hash": "de6749383d52de31b49a6d5b7a83f5c9"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/provider_overrides.rs": {
+    "mtime": 1778913956.3338683,
+    "hash": "106206252fc4d44c841727156c268b16"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/connection.rs": {
+    "mtime": 1778913956.3338683,
+    "hash": "5488e125a6f03dffdab30e4809a0e4c5"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/apis/mod.rs": {
+    "mtime": 1778910825.1877546,
+    "hash": "0249cec2232cf288f29708737efa93e6"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/apis/messages.rs": {
+    "mtime": 1778914078.1478355,
+    "hash": "12d9404e058c54d6f93fda119174ffea"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/apis/completions.rs": {
+    "mtime": 1778914078.1468356,
+    "hash": "e4c4031ec4187bce50373373ef1846ca"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/src/apis/responses.rs": {
+    "mtime": 1778914046.3423238,
+    "hash": "baacdfc0e8d5655a171125848b531b00"
   },
   "/home/pmooring/src/AgentIron/iron-providers/tests/error_tests.rs": {
     "mtime": 1775962125.9673955,
@@ -76,8 +84,8 @@
     "hash": "f98e500b66cba994cd71cf95ef179488"
   },
   "/home/pmooring/src/AgentIron/iron-providers/tests/responses_api_tests.rs": {
-    "mtime": 1776652472.929086,
-    "hash": "ba6e0ab357473332079ab307104cb444"
+    "mtime": 1778912166.7707927,
+    "hash": "a6f90fb754183a0c78d898ba1c13d3f4"
   },
   "/home/pmooring/src/AgentIron/iron-providers/README.md": {
     "mtime": 1777955276.38617,
@@ -139,9 +147,25 @@
     "mtime": 1777955276.3874173,
     "hash": "3e6a6b94ab0d615f330a7b1cd4403b32"
   },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/provider-architecture-refactor/proposal.md": {
+    "mtime": 1778910441.1374004,
+    "hash": "2fbcc427459977f8743249bd875a11c3"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/provider-architecture-refactor/design.md": {
+    "mtime": 1778910441.1374004,
+    "hash": "afdaac7e74431038afa092a95ee43e07"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/provider-architecture-refactor/tasks.md": {
+    "mtime": 1778912436.8632016,
+    "hash": "cf7be884ae29096a3f0520efb7e355c9"
+  },
+  "/home/pmooring/src/AgentIron/iron-providers/openspec/changes/provider-architecture-refactor/specs/provider-architecture-refactor/spec.md": {
+    "mtime": 1778910441.1384003,
+    "hash": "76721088cc0b5ec7c5483cc0eceaebb7"
+  },
   "/home/pmooring/src/AgentIron/iron-providers/openspec/specs/chat-completions-stream-assembly/spec.md": {
-    "mtime": 1775962125.9672813,
-    "hash": "b7efd0f5f7657e7d8c2c113e0a2dd691"
+    "mtime": 1778909662.7869332,
+    "hash": "97d03e24294f39b665d4a964a5a5dec5"
   },
   "/home/pmooring/src/AgentIron/iron-providers/src/system_prompt_fragments/anthropic.md": {
     "mtime": 1777611621.7304711,
