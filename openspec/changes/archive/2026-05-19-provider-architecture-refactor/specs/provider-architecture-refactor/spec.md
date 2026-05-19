@@ -156,8 +156,6 @@ The refactor SHALL remove public connection/configuration APIs that preserve the
 - **THEN** migration notes describe removed public types and renamed `ApiFamily` variants
 - **AND** old serialized `ApiFamily` names are not supported through compatibility aliases
 
-## MODIFIED Requirements
-
 ### Requirement: Provider registry SHALL dispatch all supported API families
 The provider registry SHALL return providers that can dispatch inference and streaming requests for every registered API-family variant.
 
