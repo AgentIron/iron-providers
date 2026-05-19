@@ -52,7 +52,7 @@ impl ProviderRegistry {
             ))
         })?;
 
-        crate::generic_provider::GenericProvider::from_arc(Arc::clone(profile), runtime_config)
+        crate::connection::ProviderConnection::from_arc(Arc::clone(profile), runtime_config)
             .map(|p| Box::new(p) as Box<dyn Provider>)
     }
 
@@ -103,7 +103,7 @@ impl ProviderRegistry {
         self.register(
             ProviderProfile::new(
                 "anthropic",
-                ApiFamily::AnthropicMessages,
+                ApiFamily::Messages,
                 "https://api.anthropic.com",
             )
             .with_auth(AuthStrategy::ApiKeyHeader {
@@ -114,7 +114,7 @@ impl ProviderRegistry {
         self.register(
             ProviderProfile::new(
                 "minimax",
-                ApiFamily::AnthropicMessages,
+                ApiFamily::Messages,
                 "https://api.minimax.io/anthropic",
             )
             .with_auth(AuthStrategy::BearerToken),
@@ -123,7 +123,7 @@ impl ProviderRegistry {
         self.register(
             ProviderProfile::new(
                 "minimax-code",
-                ApiFamily::AnthropicMessages,
+                ApiFamily::Messages,
                 "https://api.minimax.io/anthropic",
             )
             .with_models_dev_id("minimax-coding-plan")
@@ -133,14 +133,14 @@ impl ProviderRegistry {
 
         self.register(ProviderProfile::new(
             "zai",
-            ApiFamily::OpenAiChatCompletions,
+            ApiFamily::Completions,
             "https://api.z.ai/api/paas/v4",
         ));
 
         self.register(
             ProviderProfile::new(
                 "zai-code",
-                ApiFamily::OpenAiChatCompletions,
+                ApiFamily::Completions,
                 "https://api.z.ai/api/coding/paas/v4",
             )
             .with_models_dev_id("zai-coding-plan")
@@ -148,18 +148,14 @@ impl ProviderRegistry {
         );
 
         self.register(
-            ProviderProfile::new(
-                "kimi",
-                ApiFamily::OpenAiChatCompletions,
-                "https://api.moonshot.ai/v1",
-            )
-            .with_models_dev_id("moonshotai"),
+            ProviderProfile::new("kimi", ApiFamily::Completions, "https://api.moonshot.ai/v1")
+                .with_models_dev_id("moonshotai"),
         );
 
         self.register(
             ProviderProfile::new(
                 "kimi-code",
-                ApiFamily::AnthropicMessages,
+                ApiFamily::Messages,
                 "https://api.kimi.com/coding",
             )
             .with_models_dev_id("kimi-for-coding")
@@ -173,7 +169,7 @@ impl ProviderRegistry {
         self.register(
             ProviderProfile::new(
                 "openrouter",
-                ApiFamily::OpenAiChatCompletions,
+                ApiFamily::Completions,
                 "https://openrouter.ai/api/v1",
             )
             .with_header(
@@ -185,14 +181,14 @@ impl ProviderRegistry {
 
         self.register(ProviderProfile::new(
             "requesty",
-            ApiFamily::OpenAiChatCompletions,
+            ApiFamily::Completions,
             "https://api.requesty.ai/v1",
         ));
 
         {
             let mut codex = ProviderProfile::new(
                 "codex",
-                ApiFamily::CodexResponses,
+                ApiFamily::Responses,
                 "https://chatgpt.com/backend-api/codex",
             )
             .with_models_dev_id("openai")
@@ -293,7 +289,7 @@ mod tests {
 
         assert_eq!(kimi.slug, "kimi");
         assert_eq!(kimi_code.slug, "kimi-code");
-        assert_eq!(kimi_code.family, ApiFamily::AnthropicMessages);
+        assert_eq!(kimi_code.family, ApiFamily::Messages);
         assert_eq!(
             kimi_code.auth_strategy_for(CredentialKind::ApiKey),
             Some(&AuthStrategy::ApiKeyHeader {
@@ -309,11 +305,7 @@ mod tests {
         let mut registry = ProviderRegistry::new();
         registry.register_by_url_pattern(
             "https://api.openai.com/v1",
-            ProviderProfile::new(
-                "openai",
-                ApiFamily::OpenAiResponses,
-                "https://api.openai.com/v1",
-            ),
+            ProviderProfile::new("openai", ApiFamily::Responses, "https://api.openai.com/v1"),
         );
 
         let result = registry.resolve_by_url("https://api.openai.com/v1/chat/completions");
@@ -330,7 +322,7 @@ mod tests {
             "https://api.example.com/v1",
             ProviderProfile::new(
                 "general",
-                ApiFamily::OpenAiChatCompletions,
+                ApiFamily::Completions,
                 "https://api.example.com/v1",
             ),
         );
@@ -338,7 +330,7 @@ mod tests {
             "https://api.example.com/v1/coding",
             ProviderProfile::new(
                 "coding",
-                ApiFamily::OpenAiChatCompletions,
+                ApiFamily::Completions,
                 "https://api.example.com/v1/coding",
             ),
         );
@@ -393,8 +385,8 @@ mod tests {
     #[test]
     fn test_fragments_contain_no_tera_delimiters() {
         let fragments = [
-            crate::anthropic::SYSTEM_PROMPT_FRAGMENT,
-            crate::openai::SYSTEM_PROMPT_FRAGMENT,
+            crate::apis::messages::SYSTEM_PROMPT_FRAGMENT,
+            crate::apis::completions::SYSTEM_PROMPT_FRAGMENT,
         ];
         for fragment in fragments {
             assert!(
@@ -432,7 +424,7 @@ mod tests {
             .resolve_by_models_dev_id("openai")
             .expect("codex uses models_dev_id = openai");
         assert_eq!(profile.slug, "codex");
-        assert_eq!(profile.family, ApiFamily::CodexResponses);
+        assert_eq!(profile.family, ApiFamily::Responses);
         assert_eq!(profile.purpose, EndpointPurpose::Coding);
         assert!(profile.supports_credential(CredentialKind::OAuthBearer));
         assert!(!profile.supports_credential(CredentialKind::ApiKey));

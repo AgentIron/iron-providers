@@ -1,24 +1,30 @@
 use crate::{
-    anthropic, completions,
-    http_client::{build_http_client, HttpClientParams},
+    apis::{completions, messages, responses},
+    auth::auth_headers,
+    http_client::build_http_client,
     profile::{
         ApiFamily, AuthStrategy, CredentialKind, ProviderCredential, ProviderProfile, RuntimeConfig,
     },
+    provider_overrides::{override_headers, resolve_overrides},
     InferenceRequest, Message, ProviderEvent, ProviderRegistry, Transcript,
 };
 use mockito::Matcher;
 use serde_json::json;
 
 fn completions_profile(slug: &str, base_url: &str) -> ProviderProfile {
-    ProviderProfile::new(slug, ApiFamily::OpenAiChatCompletions, base_url)
+    ProviderProfile::new(slug, ApiFamily::Completions, base_url)
 }
 
 fn anthropic_profile(slug: &str, base_url: &str) -> ProviderProfile {
-    ProviderProfile::new(slug, ApiFamily::AnthropicMessages, base_url).with_auth(
+    ProviderProfile::new(slug, ApiFamily::Messages, base_url).with_auth(
         AuthStrategy::ApiKeyHeader {
             header_name: "x-api-key".into(),
         },
     )
+}
+
+fn responses_profile(slug: &str, base_url: &str) -> ProviderProfile {
+    ProviderProfile::new(slug, ApiFamily::Responses, base_url)
 }
 
 /// Build a `reqwest::Client` for use in tests, applying profile auth and
@@ -35,15 +41,44 @@ fn build_test_client(
             profile.slug, kind
         ))
     })?;
-    build_http_client(HttpClientParams {
-        context: &context,
-        credential: &runtime.credential,
-        auth_strategy,
-        default_headers: &profile.default_headers,
-        extra_headers: &[],
-        connect_timeout: runtime.effective_connect_timeout(),
-        read_timeout: runtime.effective_read_timeout(),
-    })
+
+    let auth_h = auth_headers(&runtime.credential, auth_strategy, &context)?;
+    let overrides = resolve_overrides(profile, runtime);
+    let override_h = override_headers(&overrides)?;
+
+    let mut final_headers = reqwest::header::HeaderMap::new();
+    final_headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+
+    for (key, value) in &auth_h {
+        final_headers.insert(key.clone(), value.clone());
+    }
+    for (key, value) in &override_h {
+        final_headers.insert(key.clone(), value.clone());
+    }
+    for (key, value) in &profile.default_headers {
+        let hk = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
+            crate::ProviderError::invalid_request(format!(
+                "Invalid default header name '{}' for {}: {}",
+                key, context, e
+            ))
+        })?;
+        let hv = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+            crate::ProviderError::invalid_request(format!(
+                "Invalid default header value for '{}' on {}: {}",
+                key, context, e
+            ))
+        })?;
+        final_headers.insert(hk, hv);
+    }
+
+    build_http_client(
+        final_headers,
+        runtime.effective_connect_timeout(),
+        runtime.effective_read_timeout(),
+    )
 }
 
 fn chat_completion_response(text: &str) -> String {
@@ -84,6 +119,16 @@ fn anthropic_response(text: &str) -> String {
     serde_json::to_string(&json!({
         "content": [{"type": "text", "text": text}],
         "stop_reason": "end_turn"
+    }))
+    .unwrap()
+}
+
+fn responses_response(text: &str) -> String {
+    serde_json::to_string(&json!({
+        "output": [{
+            "type": "message",
+            "content": [{"type": "output_text", "text": text}]
+        }]
     }))
     .unwrap()
 }
@@ -172,7 +217,7 @@ async fn test_anthropic_basic_response() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = anthropic::infer(client, &profile, request).await;
+    let result = messages::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -205,7 +250,7 @@ async fn test_kimi_code_api_key_uses_x_api_key_header() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = anthropic::infer(client, &profile, request).await;
+    let result = messages::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -238,7 +283,7 @@ async fn test_kimi_code_oauth_uses_bearer_header() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = anthropic::infer(client, &profile, request).await;
+    let result = messages::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -321,7 +366,7 @@ async fn test_anthropic_error_handling() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = anthropic::infer(client, &profile, request).await;
+    let result = messages::infer(client, &profile, request).await;
     mock.assert_async().await;
 
     assert!(result.is_err());
@@ -399,7 +444,7 @@ async fn test_anthropic_stream() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = anthropic::infer_stream(client, &profile, request)
+    let stream = messages::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -416,6 +461,197 @@ async fn test_anthropic_stream() {
 
     assert_eq!(outputs.join(""), "Hi");
     assert!(events
+        .iter()
+        .any(|e| matches!(e, Ok(ProviderEvent::Complete))));
+}
+
+#[tokio::test]
+async fn test_responses_request_uses_structured_function_items() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("POST", "/responses")
+        .match_body(Matcher::PartialJson(json!({
+            "input": [
+                {"type": "message", "role": "user", "content": "continue"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_123",
+                    "name": "lookup",
+                    "arguments": "{\"query\":\"rust\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": "{\"answer\":\"safe\"}"
+                }
+            ]
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(responses_response("done"))
+        .create_async()
+        .await;
+
+    let profile = responses_profile("openai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let overrides = resolve_overrides(&profile, &runtime);
+    let request = InferenceRequest::new(
+        "gpt-5",
+        Transcript::with_messages(vec![
+            Message::user("continue"),
+            Message::AssistantToolCall {
+                call_id: "call_123".into(),
+                tool_name: "lookup".into(),
+                arguments: json!({"query": "rust"}),
+            },
+            Message::tool("call_123", "lookup", json!({"answer": "safe"})),
+        ]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let events = responses::infer(client, &profile, &overrides, request)
+        .await
+        .unwrap();
+
+    mock.assert_async().await;
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "done")));
+}
+
+#[tokio::test]
+async fn test_codex_responses_overrides_add_headers_and_fixed_body() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("POST", "/responses")
+        .match_header("originator", "iron-providers")
+        .match_header("user-agent", Matcher::Regex(r"^iron-providers/".into()))
+        .match_body(Matcher::PartialJson(json!({
+            "store": false,
+            "reasoning": {"effort": "medium"},
+            "parallel_tool_calls": true
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(responses_response("codex"))
+        .create_async()
+        .await;
+
+    let profile = responses_profile("codex", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let overrides = resolve_overrides(&profile, &runtime);
+    let request = InferenceRequest::new(
+        "codex-mini-latest",
+        Transcript::with_messages(vec![Message::user("hi")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let events = responses::infer(client, &profile, &overrides, request)
+        .await
+        .unwrap();
+
+    mock.assert_async().await;
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, ProviderEvent::Output { content } if content == "codex")));
+}
+
+#[tokio::test]
+async fn test_responses_stream_text_and_tool_call() {
+    let mut server = mockito::Server::new_async().await;
+
+    let sse_body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Thinking\"}\n\n\
+                    data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"search\"}}\n\n\
+                    data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"call_1\",\"delta\":\"{\\\"query\\\":\"}\n\n\
+                    data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"call_1\",\"delta\":\"\\\"rust\\\"}\"}\n\n\
+                    data: {\"type\":\"response.function_call_arguments.done\",\"call_id\":\"call_1\",\"arguments\":\"{\\\"query\\\":\\\"rust\\\"}\"}\n\n\
+                    data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"search\"}}\n\n\
+                    data: {\"type\":\"response.completed\"}\n\n";
+
+    let mock = server
+        .mock("POST", "/responses")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = responses_profile("openai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let overrides = resolve_overrides(&profile, &runtime);
+    let request = InferenceRequest::new(
+        "gpt-5",
+        Transcript::with_messages(vec![Message::user("search")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = responses::infer_stream(client, &profile, &overrides, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Ok(ProviderEvent::Output { content }) if content == "Thinking")));
+
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::ToolCall { call }) => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].call_id, "call_1");
+    assert_eq!(tool_calls[0].tool_name, "search");
+    assert_eq!(tool_calls[0].arguments["query"], "rust");
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Ok(ProviderEvent::Complete))));
+}
+
+#[tokio::test]
+async fn test_responses_stream_failed_emits_error_without_complete() {
+    let mut server = mockito::Server::new_async().await;
+
+    let sse_body =
+        "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"boom\"}}}\n\n\
+                    data: {\"type\":\"response.completed\"}\n\n";
+
+    let mock = server
+        .mock("POST", "/responses")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = responses_profile("openai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let overrides = resolve_overrides(&profile, &runtime);
+    let request = InferenceRequest::new(
+        "gpt-5",
+        Transcript::with_messages(vec![Message::user("fail")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = responses::infer_stream(client, &profile, &overrides, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Ok(ProviderEvent::Error { source }) if source.to_string().contains("boom")
+    )));
+    assert!(!events
         .iter()
         .any(|e| matches!(e, Ok(ProviderEvent::Complete))));
 }
@@ -758,8 +994,9 @@ async fn test_completions_stream_delayed_metadata() {
     let mut server = mockito::Server::new_async().await;
 
     // Tool call where id and name arrive after arguments start
-    // Build SSE body using a simpler approach
-    let chunk1 = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\"}}]}}]}\n\n";
+    let chunk1 = r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]}}]}
+
+"#;
     let chunk2 = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_delayed\",\"function\":{\"name\":\"delayed_func\"}}]}}]}\n\n";
     let chunk3 = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"x\\\":1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n";
     let chunk4 = "data: [DONE]\n\n";
@@ -964,7 +1201,7 @@ async fn test_anthropic_stream_invalid_json_skipped() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = anthropic::infer_stream(client, &profile, request)
+    let stream = messages::infer_stream(client, &profile, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();

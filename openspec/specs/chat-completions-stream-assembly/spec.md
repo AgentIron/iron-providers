@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Defines how the Chat Completions streaming adapter assembles streamed tool-call fragments into normalized provider events without merging unrelated choices or tool calls.
+
+## Requirements
 
 ### Requirement: Streamed tool calls SHALL be assembled by streamed identity
 The Chat Completions streaming adapter SHALL maintain pending tool-call state using the streamed choice index and streamed tool-call index, and it MUST NOT merge fragments that belong to different choices or different tool calls.

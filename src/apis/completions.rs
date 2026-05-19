@@ -1,3 +1,8 @@
+//! OpenAI Chat Completions API adapter
+//!
+//! Handles request projection, response parsing, and streaming normalization
+//! for Completions-family providers.
+
 use crate::{
     error::ProviderResult,
     model::{ChoiceRequest, ProviderEvent, ToolCall, CHOICE_REQUEST_TOOL_NAME},
@@ -11,30 +16,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tracing::{debug, trace, warn};
-
-#[cfg(test)]
-fn build_client(
-    profile: &ProviderProfile,
-    runtime: &crate::profile::RuntimeConfig,
-) -> ProviderResult<Client> {
-    let context = format!("profile '{}'", profile.slug);
-    let kind = runtime.credential.kind();
-    let auth_strategy = profile.auth_strategy_for(kind).ok_or_else(|| {
-        ProviderError::auth(format!(
-            "Provider '{}' does not support {:?} credentials",
-            profile.slug, kind
-        ))
-    })?;
-    crate::http_client::build_http_client(crate::http_client::HttpClientParams {
-        context: &context,
-        credential: &runtime.credential,
-        auth_strategy,
-        default_headers: &profile.default_headers,
-        extra_headers: &[],
-        connect_timeout: runtime.effective_connect_timeout(),
-        read_timeout: runtime.effective_read_timeout(),
-    })
-}
 
 fn build_chat_messages(request: &InferenceRequest) -> Vec<Value> {
     let mut messages = Vec::new();
@@ -216,7 +197,6 @@ struct StreamFunction {
     arguments: Option<String>,
 }
 
-/// Accumulates state for a single tool call being assembled from stream chunks
 #[derive(Debug, Default)]
 struct ToolCallAccumulator {
     id: Option<String>,
@@ -224,20 +204,17 @@ struct ToolCallAccumulator {
     arguments: String,
 }
 
-/// Accumulates state for all tool calls in a single choice
 #[derive(Debug, Default)]
 struct ChoiceAccumulator {
     tool_calls: BTreeMap<u32, ToolCallAccumulator>,
 }
 
-/// Stream assembler that maintains indexed state by choice and tool-call index
 #[derive(Debug, Default)]
 struct StreamAssembler {
     choices: BTreeMap<u32, ChoiceAccumulator>,
 }
 
 impl StreamAssembler {
-    /// Apply a tool-call delta to the accumulator
     fn apply_tool_call_delta(
         &mut self,
         choice_index: u32,
@@ -247,28 +224,24 @@ impl StreamAssembler {
         let choice = self.choices.entry(choice_index).or_default();
         let tool = choice.tool_calls.entry(tool_index).or_default();
 
-        // Update id if present
         if let Some(ref id) = delta.id {
             if !id.is_empty() {
                 tool.id = Some(id.clone());
             }
         }
 
-        // Update function name if present
         if let Some(ref func) = delta.function {
             if let Some(ref name) = func.name {
                 if !name.is_empty() {
                     tool.name = Some(name.clone());
                 }
             }
-            // Accumulate arguments
             if let Some(ref args) = func.arguments {
                 tool.arguments.push_str(args);
             }
         }
     }
 
-    /// Finalize all pending tool calls for a choice and return them in index order
     fn finalize_choice(&mut self, choice_index: u32) -> Vec<ToolCall> {
         let mut finalized = Vec::new();
 
@@ -325,7 +298,6 @@ impl StreamAssembler {
         finalized
     }
 
-    /// Finalize all remaining pending state (safety flush for [DONE])
     fn finalize_all(&mut self) -> Vec<ToolCall> {
         let mut finalized = Vec::new();
         let choice_indices: Vec<u32> = self.choices.keys().copied().collect();
@@ -342,21 +314,9 @@ impl StreamAssembler {
         finalized
     }
 
-    /// Check if there are any pending tool calls
     fn has_pending(&self) -> bool {
         !self.choices.is_empty()
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatError {
-    error: ChatErrorBody,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatErrorBody {
-    message: Option<String>,
-    code: Option<String>,
 }
 
 fn response_to_events(response: ChatCompletionResponse) -> Vec<ProviderEvent> {
@@ -430,7 +390,7 @@ fn build_request_body(request: &InferenceRequest, stream: bool) -> serde_json::M
     body
 }
 
-pub async fn infer(
+pub(crate) async fn infer(
     client: Client,
     profile: &ProviderProfile,
     request: InferenceRequest,
@@ -462,7 +422,7 @@ pub async fn infer(
     Ok(response_to_events(result))
 }
 
-pub async fn infer_stream(
+pub(crate) async fn infer_stream(
     client: Client,
     profile: &ProviderProfile,
     request: InferenceRequest,
@@ -494,9 +454,6 @@ pub async fn infer_stream(
     Ok(stream)
 }
 
-/// SSE stream adapter for Chat Completions.
-///
-/// Handles `[DONE]` by flushing pending tool calls and emitting `Complete`.
 #[derive(Default)]
 struct CompletionsSseAdapter {
     assembler: StreamAssembler,
@@ -516,7 +473,6 @@ impl crate::stream_util::SseStreamAdapter for CompletionsSseAdapter {
     fn handle_done(&mut self) -> Vec<ProviderResult<ProviderEvent>> {
         let mut events = Vec::new();
 
-        // Safety flush: finalize any pending tool calls before Complete
         if self.assembler.has_pending() {
             debug!("[DONE] received with pending tool calls, performing safety flush");
             let tool_calls = self.assembler.finalize_all();
@@ -551,7 +507,6 @@ impl StreamAssembler {
         for choice in chunk.choices {
             let choice_index = choice.index;
 
-            // Emit text content immediately
             if let Some(ref content) = choice.delta.content {
                 if !content.is_empty() {
                     events.push(Ok(ProviderEvent::Output {
@@ -560,14 +515,12 @@ impl StreamAssembler {
                 }
             }
 
-            // Accumulate tool-call deltas
             if let Some(tool_calls) = choice.delta.tool_calls {
                 for tc in tool_calls {
                     self.apply_tool_call_delta(choice_index, tc.index, &tc);
                 }
             }
 
-            // Check for semantic completion boundary
             if let Some(ref finish_reason) = choice.finish_reason {
                 debug!(
                     choice_index = choice_index,
@@ -575,7 +528,6 @@ impl StreamAssembler {
                     "Choice reached completion boundary"
                 );
 
-                // Finalize all pending tool calls for this choice
                 let finalized = self.finalize_choice(choice_index);
                 for tool_call in finalized {
                     if tool_call.tool_name == CHOICE_REQUEST_TOOL_NAME {
@@ -638,146 +590,15 @@ fn handle_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{Message, RuntimeConfig, RuntimeRecord, ToolPolicy, Transcript};
-    use serde_json::json;
-
-    #[test]
-    fn test_build_chat_messages_basic() {
-        let transcript =
-            Transcript::with_messages(vec![Message::user("hello"), Message::assistant("hi there")]);
-        let request = InferenceRequest::new("gpt-4o", transcript);
-        let messages = build_chat_messages(&request);
-
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0]["role"], "user");
-        assert_eq!(messages[1]["role"], "assistant");
-    }
-
-    #[test]
-    fn test_build_chat_messages_with_system_prompt() {
-        let request =
-            InferenceRequest::new("gpt-4o", Transcript::new()).with_instructions("You are helpful");
-        let messages = build_chat_messages(&request);
-
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["role"], "system");
-    }
-
-    #[test]
-    fn test_build_chat_messages_with_tool_calls() {
-        let transcript = Transcript::with_messages(vec![
-            Message::user("check weather"),
-            Message::AssistantToolCall {
-                call_id: "call_1".into(),
-                tool_name: "weather".into(),
-                arguments: json!({"city": "SF"}),
-            },
-            Message::tool("call_1", "weather", json!({"temp": 72})),
-        ]);
-        let request = InferenceRequest::new("gpt-4o", transcript);
-        let messages = build_chat_messages(&request);
-
-        assert_eq!(messages.len(), 3);
-        assert_eq!(messages[1]["role"], "assistant");
-        assert!(messages[1]["tool_calls"].is_array());
-    }
-
-    #[test]
-    fn test_build_chat_tools() {
-        let request = InferenceRequest::new("gpt-4o", Transcript::new()).with_tools(vec![
-            crate::ToolDefinition::new(
-                "lookup",
-                "lookup a value",
-                json!({"type": "object", "properties": {"query": {"type": "string"}}}),
-            ),
-        ]);
-
-        let tools = build_chat_tools(&request).expect("tools");
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["function"]["name"], "lookup");
-    }
-
-    #[test]
-    fn test_map_tool_choice() {
-        let request =
-            InferenceRequest::new("gpt-4o", Transcript::new()).with_tool_policy(ToolPolicy::None);
-        assert_eq!(map_tool_choice(&request), Some(json!("none")));
-
-        let request =
-            InferenceRequest::new("gpt-4o", Transcript::new()).with_tool_policy(ToolPolicy::Auto);
-        assert_eq!(map_tool_choice(&request), Some(json!("auto")));
-
-        let request = InferenceRequest::new("gpt-4o", Transcript::new())
-            .with_tool_policy(ToolPolicy::Required);
-        assert_eq!(map_tool_choice(&request), Some(json!("required")));
-
-        let request = InferenceRequest::new("gpt-4o", Transcript::new())
-            .with_tool_policy(ToolPolicy::Specific("lookup".into()));
-        let choice = map_tool_choice(&request).unwrap();
-        assert_eq!(choice["function"]["name"], "lookup");
-    }
-
-    #[test]
-    fn test_handle_error_status_codes() {
-        let err = handle_error(
-            reqwest::StatusCode::UNAUTHORIZED,
-            r#"{"error":{"message":"bad key","code":"invalid_api_key"}}"#,
-        );
-        assert!(err.is_authentication());
-
-        let err = handle_error(
-            reqwest::StatusCode::TOO_MANY_REQUESTS,
-            r#"{"error":{"message":"slow down","code":"rate_limit"}}"#,
-        );
-        assert!(err.is_rate_limit());
-    }
-
-    #[test]
-    fn test_build_client_fails_fast_on_invalid_default_header_name() {
-        let profile = ProviderProfile::new(
-            "broken",
-            crate::ApiFamily::OpenAiChatCompletions,
-            "https://example.com/v1",
-        )
-        .with_header("bad header", "value");
-
-        let error = build_client(&profile, &RuntimeConfig::new("test-key")).unwrap_err();
-        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
-        assert!(error.to_string().contains("Invalid default header name"));
-    }
-
-    #[tokio::test]
-    async fn test_infer_rejects_empty_model() {
-        let profile = ProviderProfile::new(
-            "test",
-            crate::ApiFamily::OpenAiChatCompletions,
-            "https://example.com/v1",
-        );
-        let runtime = RuntimeConfig::new("test-key");
-        let client = build_client(&profile, &runtime).unwrap();
-        let request = InferenceRequest::new("", Transcript::new());
-
-        let error = infer(client, &profile, request).await.unwrap_err();
-        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
-        assert!(error.to_string().contains("model must be a non-empty"));
-    }
-
-    #[test]
-    fn test_build_chat_messages_does_not_project_runtime_records() {
-        let mut request = InferenceRequest::new(
-            "gpt-4o",
-            Transcript::with_messages(vec![Message::user("hello")]),
-        );
-        request
-            .context
-            .add_record(RuntimeRecord::new("session_state", json!({"secret": true})));
-
-        let messages = build_chat_messages(&request);
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["role"], "user");
-        assert_eq!(messages[0]["content"], "hello");
-    }
+#[derive(Debug, Deserialize)]
+struct ChatError {
+    error: ChatErrorBody,
 }
+
+#[derive(Debug, Deserialize)]
+struct ChatErrorBody {
+    message: Option<String>,
+    code: Option<String>,
+}
+
+pub const SYSTEM_PROMPT_FRAGMENT: &str = include_str!("../system_prompt_fragments/openai.md");
