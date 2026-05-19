@@ -7,6 +7,7 @@ auth/header separation, provider override resolution, and public API migration
 for protocol-oriented provider architecture.
 
 ## Requirements
+
 ### Requirement: Provider architecture SHALL separate provider identity from API protocol behavior
 Provider profiles SHALL describe provider identity and static configuration, while API adapters SHALL implement protocol-specific request projection, response parsing, and streaming normalization.
 
