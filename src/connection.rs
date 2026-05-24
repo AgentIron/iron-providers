@@ -278,4 +278,40 @@ mod tests {
             .to_string()
             .contains("collides with protected header"));
     }
+
+    #[test]
+    fn test_local_connection_with_noauth() {
+        let registry = crate::registry::ProviderRegistry::default();
+        let result = registry.get("local", crate::profile::RuntimeConfig::none());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_local_connection_with_api_key() {
+        let registry = crate::registry::ProviderRegistry::default();
+        let result = registry.get("local", crate::profile::RuntimeConfig::new("my-token"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_noauth_fails_for_api_key_provider() {
+        let registry = crate::registry::ProviderRegistry::default();
+        let result = registry.get("zai", crate::profile::RuntimeConfig::none());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_noauth_empty_auth_headers_composition() {
+        let auth = HeaderMap::new();
+        let result = compose_headers(
+            auth,
+            HeaderMap::new(),
+            &std::collections::HashMap::new(),
+            "test",
+        )
+        .unwrap();
+        assert!(result.get("authorization").is_none());
+        assert!(result.get("x-api-key").is_none());
+        assert_eq!(result.get("content-type").unwrap(), "application/json");
+    }
 }

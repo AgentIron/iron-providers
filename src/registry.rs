@@ -199,6 +199,26 @@ impl ProviderRegistry {
             }];
             self.register(codex);
         }
+
+        self.register(ProviderProfile::new(
+            "ollama-cloud",
+            ApiFamily::Completions,
+            "https://api.ollama.cloud",
+        ));
+
+        {
+            let local =
+                ProviderProfile::new("local", ApiFamily::Completions, "http://localhost:11434/v1")
+                    .with_credential_auth(CredentialKind::NoAuth, AuthStrategy::NoAuth);
+            let local_arc = Arc::new(local);
+            let key = "local".to_string();
+            self.profiles.insert(key, Arc::clone(&local_arc));
+            self.url_patterns
+                .push(("http://localhost".into(), Arc::clone(&local_arc)));
+            self.url_patterns
+                .push(("http://127.0.0.1".into(), Arc::clone(&local_arc)));
+            self.url_patterns.push(("http://0.0.0.0".into(), local_arc));
+        }
     }
 }
 
@@ -502,5 +522,129 @@ mod tests {
         if let Err(ref e) = result {
             assert!(e.to_string().contains("expired"));
         }
+    }
+
+    #[test]
+    fn test_ollama_cloud_registered() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.profiles.get("ollama-cloud").unwrap();
+        assert_eq!(profile.family, ApiFamily::Completions);
+        assert_eq!(profile.base_url, "https://api.ollama.cloud");
+        assert!(profile.supports_credential(CredentialKind::ApiKey));
+    }
+
+    #[test]
+    fn test_ollama_cloud_accepts_api_key() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get("ollama-cloud", RuntimeConfig::new("test-key"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_local_registered() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.profiles.get("local").unwrap();
+        assert_eq!(profile.family, ApiFamily::Completions);
+        assert_eq!(profile.base_url, "http://localhost:11434/v1");
+        assert!(profile.supports_credential(CredentialKind::NoAuth));
+        assert!(profile.supports_credential(CredentialKind::ApiKey));
+    }
+
+    #[test]
+    fn test_local_accepts_noauth() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get("local", RuntimeConfig::none());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_local_accepts_api_key() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get("local", RuntimeConfig::new("my-token"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_local_rejects_oauth() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get(
+            "local",
+            RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+                access_token: "tok".into(),
+                expires_at: None,
+                id_token: None,
+            }),
+        );
+        assert!(result.is_err());
+        if let Err(ref e) = result {
+            let msg = e.to_string();
+            assert!(msg.contains("local"));
+            assert!(msg.contains("does not support"));
+        }
+    }
+
+    #[test]
+    fn test_local_in_slugs() {
+        let registry = ProviderRegistry::default();
+        let slugs: Vec<&str> = registry.profiles.keys().map(|s| s.as_str()).collect();
+        assert!(slugs.contains(&"local"));
+        assert!(slugs.contains(&"ollama-cloud"));
+    }
+
+    #[test]
+    fn test_resolve_by_url_localhost() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.resolve_by_url("http://localhost:8080/v1/chat/completions");
+        assert!(profile.is_some());
+        assert_eq!(profile.unwrap().slug, "local");
+    }
+
+    #[test]
+    fn test_resolve_by_url_127() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.resolve_by_url("http://127.0.0.1:11434/v1/chat/completions");
+        assert!(profile.is_some());
+        assert_eq!(profile.unwrap().slug, "local");
+    }
+
+    #[test]
+    fn test_resolve_by_url_0000() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.resolve_by_url("http://0.0.0.0:8000/v1/chat/completions");
+        assert!(profile.is_some());
+        assert_eq!(profile.unwrap().slug, "local");
+    }
+
+    #[test]
+    fn test_resolve_by_url_rejects_remote() {
+        let registry = ProviderRegistry::default();
+        assert!(registry
+            .resolve_by_url("https://api.openai.com/v1")
+            .is_none());
+        assert!(registry.resolve_by_url("http://example.com/v1").is_none());
+    }
+
+    #[test]
+    fn test_noauth_fails_for_api_key_provider() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get("zai", RuntimeConfig::none());
+        assert!(result.is_err());
+        if let Err(ref e) = result {
+            let msg = e.to_string();
+            assert!(msg.contains("zai"));
+            assert!(msg.contains("does not support"));
+        }
+    }
+
+    #[test]
+    fn test_noauth_validation_passes() {
+        let rt = RuntimeConfig::none();
+        assert!(rt.validate().is_ok());
+    }
+
+    #[test]
+    fn test_blank_api_key_still_invalid() {
+        let rt = RuntimeConfig::new("   ");
+        assert!(rt.validate().is_err());
     }
 }

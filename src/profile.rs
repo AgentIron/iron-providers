@@ -28,6 +28,7 @@ pub enum AuthStrategy {
         header_name: String,
         prefix: Option<String>,
     },
+    NoAuth,
 }
 
 /// Kind of credential a provider accepts.
@@ -35,6 +36,7 @@ pub enum AuthStrategy {
 pub enum CredentialKind {
     ApiKey,
     OAuthBearer,
+    NoAuth,
 }
 
 /// Concrete runtime credential supplied to a provider.
@@ -49,6 +51,7 @@ pub enum ProviderCredential {
         expires_at: Option<std::time::SystemTime>,
         id_token: Option<String>,
     },
+    NoAuth,
 }
 
 impl ProviderCredential {
@@ -57,14 +60,15 @@ impl ProviderCredential {
         match self {
             ProviderCredential::ApiKey(_) => CredentialKind::ApiKey,
             ProviderCredential::OAuthBearer { .. } => CredentialKind::OAuthBearer,
+            ProviderCredential::NoAuth => CredentialKind::NoAuth,
         }
     }
 
-    /// Return the raw secret value suitable for placement on the wire.
     pub fn secret(&self) -> &str {
         match self {
             ProviderCredential::ApiKey(v) => v,
             ProviderCredential::OAuthBearer { access_token, .. } => access_token,
+            ProviderCredential::NoAuth => "",
         }
     }
 }
@@ -218,6 +222,14 @@ impl RuntimeConfig {
         }
     }
 
+    pub fn none() -> Self {
+        Self {
+            credential: ProviderCredential::NoAuth,
+            connect_timeout: None,
+            read_timeout: None,
+        }
+    }
+
     /// Override the TCP+TLS connect timeout.
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(timeout);
@@ -244,6 +256,7 @@ impl RuntimeConfig {
 
     pub fn validate(&self) -> Result<(), ProviderError> {
         match &self.credential {
+            ProviderCredential::NoAuth => Ok(()),
             ProviderCredential::ApiKey(key) if key.trim().is_empty() => {
                 Err(ProviderError::auth("API key is required but was empty"))
             }
@@ -370,5 +383,31 @@ mod tests {
         };
         assert_eq!(oauth.kind(), CredentialKind::OAuthBearer);
         assert_eq!(oauth.secret(), "tok");
+    }
+
+    #[test]
+    fn test_noauth_credential_kind() {
+        let noauth = ProviderCredential::NoAuth;
+        assert_eq!(noauth.kind(), CredentialKind::NoAuth);
+        assert_eq!(noauth.secret(), "");
+    }
+
+    #[test]
+    fn test_runtime_config_none() {
+        let rt = RuntimeConfig::none();
+        assert_eq!(rt.credential.kind(), CredentialKind::NoAuth);
+        assert!(rt.validate().is_ok());
+    }
+
+    #[test]
+    fn test_profile_with_noauth_credential_auth() {
+        let profile = ProviderProfile::new("test", ApiFamily::Completions, "https://example.com")
+            .with_credential_auth(CredentialKind::NoAuth, AuthStrategy::NoAuth);
+        assert!(profile.supports_credential(CredentialKind::NoAuth));
+        assert!(profile.supports_credential(CredentialKind::ApiKey));
+        assert_eq!(
+            profile.auth_strategy_for(CredentialKind::NoAuth),
+            Some(&AuthStrategy::NoAuth)
+        );
     }
 }
