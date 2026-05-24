@@ -18,6 +18,7 @@ pub(crate) fn auth_headers(
     let secret = credential.secret();
 
     match auth_strategy {
+        AuthStrategy::NoAuth => {}
         AuthStrategy::BearerToken => {
             let val = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", secret))
                 .map_err(|e| {
@@ -141,5 +142,28 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Invalid bearer token value"));
+    }
+
+    #[test]
+    fn test_no_auth_produces_no_headers() {
+        let credential = ProviderCredential::NoAuth;
+        let strategy = AuthStrategy::NoAuth;
+        let headers = auth_headers(&credential, &strategy, "test").unwrap();
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn test_no_auth_no_authorization_header() {
+        let credential = ProviderCredential::NoAuth;
+        let strategy = AuthStrategy::NoAuth;
+        let headers = auth_headers(&credential, &strategy, "test").unwrap();
+        assert!(headers.get("authorization").is_none());
+        assert!(headers.get("x-api-key").is_none());
+    }
+
+    #[test]
+    fn test_blank_api_key_still_fails_validation() {
+        let rt = crate::profile::RuntimeConfig::new("   ");
+        assert!(rt.validate().is_err());
     }
 }
