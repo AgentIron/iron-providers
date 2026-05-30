@@ -30,6 +30,11 @@ jobs:
               return;
             }
 
+            if (/^\[CHORE\]/i.test(title)) {
+              core.info("CHORE PR detected — skipping issue reference requirement.");
+              return;
+            }
+
             if (!issuePattern.test(`${title}\n${body}`)) {
               core.setFailed("Pull requests must reference a GitHub issue in the title or body, for example `Closes #123`.");
             }
