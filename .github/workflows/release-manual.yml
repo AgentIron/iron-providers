@@ -68,6 +68,9 @@ jobs:
 
           echo "should_release=true" >> "$GITHUB_OUTPUT"
 
+      - name: Install audit tool
+        run: cargo install cargo-audit --locked
+
       - name: Verify build, lint, tests, and security
         if: steps.release_gate.outputs.should_release == 'true'
         run: |
