@@ -10,6 +10,8 @@ readme = "README.md"
 repository = "https://github.com/AgentIron/iron-providers"
 exclude = [
     ".opencode/**",
+    ".githooks/**",
+    ".cargo/**",
     "openspec/**",
     "tasks.py",
     "Cargo.lock",

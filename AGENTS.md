@@ -34,5 +34,21 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
 1. The graph auto-updates on file changes (via hooks).
 2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
+3. Use `get_impact_radius` for code review.
 4. Use `query_graph` pattern="tests_for" to check coverage.
+
+---
+
+## Pre-commit Hook Setup
+
+This repo uses a custom hooks directory at `.githooks/` for a pre-commit hook
+that runs `cargo fmt --check` on staged Rust files.
+
+After cloning (or pulling an update that includes this hook), run:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook will then run automatically on every `git commit`. If formatting
+fails, run `cargo fmt` and re-stage the files.

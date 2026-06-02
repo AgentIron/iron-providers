@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: read
 
 jobs:
   validate-pr-policy:
@@ -56,14 +58,33 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        run: cargo build --locked --all-targets
+      - name: Install invoke
+        run: pip install invoke
 
-      - name: Check formatting
-        run: cargo fmt --manifest-path Cargo.toml -- --check
-
-      - name: Lint
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Build, format, and lint
+        run: inv build
 
       - name: Test
-        run: cargo test --locked
+        run: inv test
+
+      - name: Security audit (non-blocking)
+        id: audit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          inv security 2>&1 | tee /tmp/audit-output.txt
+
+      - name: Post audit results as PR comment
+        if: steps.audit.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const auditOutput = fs.readFileSync('/tmp/audit-output.txt', 'utf8');
+            const body = `## 🔒 Security Audit Results\n\nThe audit found advisories:\n\n\`\`\`\n${auditOutput.slice(0, 10000)}\n\`\`\`\n\n*This is informational only — it does not block this PR.*`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

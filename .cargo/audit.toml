@@ -1,0 +1,6 @@
+# audit.toml — cargo audit configuration
+# Add acknowledged advisories here with `ignore = ["RUSTSEC-XXXX-XXXX"]`
+# This file is version-controlled so the team reviews advisory decisions.
+
+[advisories]
+ignore = []

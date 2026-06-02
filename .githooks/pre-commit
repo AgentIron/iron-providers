@@ -1,0 +1,19 @@
+#!/bin/sh
+# Pre-commit hook: check Rust formatting on staged .rs files
+
+# Collect staged .rs files
+staged_files=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.rs$' || true)
+
+if [ -z "$staged_files" ]; then
+    exit 0
+fi
+
+echo "Checking staged Rust files with cargo fmt..."
+
+if ! cargo fmt --manifest-path Cargo.toml -- --check; then
+    echo ""
+    echo "❌ Rust formatting is incorrect. Run 'cargo fmt' to fix before committing."
+    exit 1
+fi
+
+echo "✅ Rust formatting looks good."
