@@ -38,6 +38,12 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Python task runner
+        run: python -m pip install invoke
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
       - name: Detect unreleased changes
         id: release_gate
         shell: bash
@@ -61,10 +67,9 @@ jobs:
       - name: Verify build, lint, and tests
         if: steps.release_gate.outputs.should_release == 'true'
         run: |
-          cargo build --locked --all-targets
-          cargo fmt --manifest-path Cargo.toml -- --check
-          cargo clippy --locked --all-targets --all-features -- -D warnings
-          cargo test --locked
+          inv build
+          inv test
+          inv security
 
       - name: Bump patch version
         if: steps.release_gate.outputs.should_release == 'true'

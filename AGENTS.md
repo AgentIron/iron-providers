@@ -36,3 +36,30 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 2. Use `detect_changes` for code review.
 3. Use `get_affected_flows` to understand impact.
 4. Use `query_graph` pattern="tests_for" to check coverage.
+
+## Local Validation Before GitHub
+
+Before opening or updating a pull request, validate locally anything that GitHub
+Actions can validate without reviewer judgment:
+
+- `cargo fmt --manifest-path Cargo.toml -- --check`
+- `cargo clippy --manifest-path Cargo.toml --all-targets --all-features -- -D warnings`
+- `cargo test --manifest-path Cargo.toml`
+- `cargo audit`
+
+Prefer the standardized Invoke workflow when available:
+
+- `inv build`
+- `inv test`
+- `inv security`
+
+Do not rely on GitHub Actions to catch formatting, lint, test, or audit issues
+that can be reproduced locally. CI should avoid blocking code review for policy
+checks unrelated to the code under review.
+
+## Pull Request Conventions
+
+- Mention the related GitHub issue in the PR title or body when one exists, for
+  example `Closes #123`.
+- Do not block PR validation solely because a PR does not reference an open
+  issue; issue links are a convention, not a required CI gate.
