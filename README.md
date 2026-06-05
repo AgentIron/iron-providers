@@ -241,7 +241,7 @@ workflow:
 
 ```bash
 pip install invoke
-cargo install cargo-audit cargo-lockbud
+cargo install cargo-audit
 ```
 
 Available tasks:
@@ -255,12 +255,29 @@ invoke security
 These tasks print a short summary with warnings, failures, and the count of
 successful steps only.
 
+Configure the repository pre-commit hook after cloning:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-commit hook runs `cargo fmt --manifest-path Cargo.toml -- --check` when
+staged Rust files are present. Before opening or updating a pull request, run the
+same checks CI can validate locally:
+
+```bash
+inv build
+inv test
+inv security
+```
+
 ## GitHub Workflow
 
 - Open a GitHub issue before starting work.
 - Create a feature branch for the issue and open a pull request against `main`.
-- Pull requests must reference an issue in the title or body, for example `Closes #123`.
-- The `Pull Request` workflow runs `cargo build`, `cargo fmt --check`, `cargo clippy`, and `cargo test` on every PR to `main`.
+- Pull requests should reference an issue in the title or body when possible, for example `Closes #123`, but CI does not block PRs solely for missing issue references.
+- The `Pull Request` workflow runs `inv build` and `inv test` on every PR to `main`.
+- The `Pull Request` workflow runs `inv security` as a non-blocking audit and posts the output as a PR comment.
 - Merges to `main` trigger an automatic patch release that bumps `Cargo.toml`, creates a `vX.Y.Z` tag, creates a GitHub release, and publishes the crate to crates.io.
 - Coordinated `minor` and `major` releases are handled through the `Release Manual` workflow in GitHub Actions.
 
@@ -268,7 +285,7 @@ Repository configuration still matters:
 
 - crates.io Trusted Publishing is supported by the release workflows through GitHub OIDC plus `rust-lang/crates-io-auth-action`, so `CRATES_IO_TOKEN` is not required when Trusted Publishing is configured for this repository and workflow.
 - If branch protection blocks workflow pushes to `main`, add a `RELEASE_GITHUB_TOKEN` secret for a token that is allowed to push the automated release commit and tag.
-- Branch protection is configured to require the `Validate PR Policy` and `Rust Checks` status checks before merge.
+- Branch protection should require the `Rust Checks` status check before merge.
 
 `build` runs:
 
@@ -284,7 +301,6 @@ Repository configuration still matters:
 
 - `cargo generate-lockfile --manifest-path Cargo.toml` when needed
 - `cargo audit`
-- `cargo lockbud -k all`
 
 ## Testing
 
