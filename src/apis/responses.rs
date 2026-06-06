@@ -341,13 +341,14 @@ pub(crate) async fn infer(
     client: Client,
     profile: &ProviderProfile,
     overrides: &ProviderOverrides,
+    effective_base_url: &str,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
     request.validate_model()?;
     let body = build_request(&request, overrides, false);
     let path = endpoint_path(profile, overrides);
 
-    let url = format!("{}{}", profile.base_url.trim_end_matches('/'), path);
+    let url = format!("{}{}", effective_base_url.trim_end_matches('/'), path);
     let response = client
         .post(&url)
         .json(&body)
@@ -372,13 +373,14 @@ pub(crate) async fn infer_stream(
     client: Client,
     profile: &ProviderProfile,
     overrides: &ProviderOverrides,
+    effective_base_url: &str,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
     request.validate_model()?;
     let body = build_request(&request, overrides, true);
     let path = endpoint_path(profile, overrides);
 
-    let url = format!("{}{}", profile.base_url.trim_end_matches('/'), path);
+    let url = format!("{}{}", effective_base_url.trim_end_matches('/'), path);
     let response = client
         .post(&url)
         .json(&body)

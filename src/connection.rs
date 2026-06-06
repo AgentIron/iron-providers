@@ -24,6 +24,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct ProviderConnection {
     profile: Arc<ProviderProfile>,
+    effective_base_url: String,
     overrides: ProviderOverrides,
     http_client: reqwest::Client,
 }
@@ -94,8 +95,13 @@ impl ProviderConnection {
             runtime.effective_read_timeout(),
         )?;
 
+        let effective_base_url = runtime
+            .base_url_override
+            .unwrap_or_else(|| profile.base_url.clone());
+
         Ok(Self {
             profile,
+            effective_base_url,
             overrides,
             http_client,
         })
@@ -104,6 +110,13 @@ impl ProviderConnection {
     /// Borrow the provider profile.
     pub fn profile(&self) -> &ProviderProfile {
         &self.profile
+    }
+
+    /// The effective base URL used for request targets. When a runtime
+    /// base URL override was supplied during construction, this returns the
+    /// override. Otherwise it returns the profile's default base URL.
+    pub fn effective_base_url(&self) -> &str {
+        &self.effective_base_url
     }
 }
 
@@ -173,17 +186,27 @@ impl Provider for ProviderConnection {
         let client = self.http_client.clone();
         let profile = Arc::clone(&self.profile);
         let overrides = self.overrides.clone();
+        let effective_base_url = self.effective_base_url.clone();
 
         Box::pin(async move {
             match profile.family {
                 ApiFamily::Messages => {
-                    crate::apis::messages::infer(client, &profile, request).await
+                    crate::apis::messages::infer(client, &profile, &effective_base_url, request)
+                        .await
                 }
                 ApiFamily::Completions => {
-                    crate::apis::completions::infer(client, &profile, request).await
+                    crate::apis::completions::infer(client, &profile, &effective_base_url, request)
+                        .await
                 }
                 ApiFamily::Responses => {
-                    crate::apis::responses::infer(client, &profile, &overrides, request).await
+                    crate::apis::responses::infer(
+                        client,
+                        &profile,
+                        &overrides,
+                        &effective_base_url,
+                        request,
+                    )
+                    .await
                 }
             }
         })
@@ -196,18 +219,37 @@ impl Provider for ProviderConnection {
         let client = self.http_client.clone();
         let profile = Arc::clone(&self.profile);
         let overrides = self.overrides.clone();
+        let effective_base_url = self.effective_base_url.clone();
 
         Box::pin(async move {
             match profile.family {
                 ApiFamily::Messages => {
-                    crate::apis::messages::infer_stream(client, &profile, request).await
+                    crate::apis::messages::infer_stream(
+                        client,
+                        &profile,
+                        &effective_base_url,
+                        request,
+                    )
+                    .await
                 }
                 ApiFamily::Completions => {
-                    crate::apis::completions::infer_stream(client, &profile, request).await
+                    crate::apis::completions::infer_stream(
+                        client,
+                        &profile,
+                        &effective_base_url,
+                        request,
+                    )
+                    .await
                 }
                 ApiFamily::Responses => {
-                    crate::apis::responses::infer_stream(client, &profile, &overrides, request)
-                        .await
+                    crate::apis::responses::infer_stream(
+                        client,
+                        &profile,
+                        &overrides,
+                        &effective_base_url,
+                        request,
+                    )
+                    .await
                 }
             }
         })
@@ -313,5 +355,61 @@ mod tests {
         assert!(result.get("authorization").is_none());
         assert!(result.get("x-api-key").is_none());
         assert_eq!(result.get("content-type").unwrap(), "application/json");
+    }
+
+    #[test]
+    fn test_effective_base_url_uses_profile_default() {
+        let profile = crate::profile::ProviderProfile::new(
+            "test",
+            crate::profile::ApiFamily::Completions,
+            "https://api.example.com/v1",
+        );
+        let runtime = crate::profile::RuntimeConfig::new("test-key");
+        let conn = ProviderConnection::from_profile(profile, runtime).unwrap();
+        assert_eq!(conn.effective_base_url(), "https://api.example.com/v1");
+        assert_eq!(conn.profile().base_url, "https://api.example.com/v1");
+    }
+
+    #[test]
+    fn test_effective_base_url_uses_override() {
+        let profile = crate::profile::ProviderProfile::new(
+            "test",
+            crate::profile::ApiFamily::Completions,
+            "https://api.example.com/v1",
+        );
+        let runtime = crate::profile::RuntimeConfig::new("test-key")
+            .with_base_url("http://localhost:1234/v1");
+        let conn = ProviderConnection::from_profile(profile, runtime).unwrap();
+        assert_eq!(conn.effective_base_url(), "http://localhost:1234/v1");
+        assert_eq!(
+            conn.profile().base_url,
+            "https://api.example.com/v1",
+            "static profile metadata must remain unchanged"
+        );
+    }
+
+    #[test]
+    fn test_effective_base_url_preserves_profile_metadata() {
+        let profile = crate::profile::ProviderProfile::new(
+            "test",
+            crate::profile::ApiFamily::Completions,
+            "https://api.example.com/v1",
+        )
+        .with_credential_auth(
+            crate::profile::CredentialKind::NoAuth,
+            crate::profile::AuthStrategy::NoAuth,
+        );
+        let runtime = crate::profile::RuntimeConfig::none().with_base_url("http://custom:9999");
+        let conn = ProviderConnection::from_profile(profile.clone(), runtime).unwrap();
+        assert_eq!(conn.effective_base_url(), "http://custom:9999");
+        assert_eq!(
+            conn.profile().family,
+            crate::profile::ApiFamily::Completions
+        );
+        assert_eq!(conn.profile().slug, "test");
+        assert!(conn
+            .profile()
+            .supports_credential(crate::profile::CredentialKind::NoAuth));
+        assert_eq!(profile.base_url, "https://api.example.com/v1");
     }
 }
