@@ -71,14 +71,24 @@ impl ProviderRegistry {
     }
 
     pub fn resolve_by_models_dev_id(&self, models_dev_id: &str) -> Option<&ProviderProfile> {
-        self.profiles
+        self.profiles_by_models_dev_id(models_dev_id)
+            .into_iter()
+            .next()
+    }
+
+    pub fn profiles_by_models_dev_id(&self, models_dev_id: &str) -> Vec<&ProviderProfile> {
+        let mut matches: Vec<&ProviderProfile> = self
+            .profiles
             .values()
-            .find(|profile| {
+            .filter(|profile| {
                 profile
                     .models_dev_slug()
                     .eq_ignore_ascii_case(models_dev_id)
             })
             .map(|arc| arc.as_ref())
+            .collect();
+        matches.sort_by_key(|p| &p.slug);
+        matches
     }
 
     pub fn slugs(&self) -> Vec<&str> {
@@ -100,6 +110,12 @@ impl ProviderRegistry {
     }
 
     pub fn register_builtins(&mut self) {
+        self.register(ProviderProfile::new(
+            "openai",
+            ApiFamily::Responses,
+            "https://api.openai.com/v1",
+        ));
+
         self.register(
             ProviderProfile::new(
                 "anthropic",
@@ -280,6 +296,7 @@ mod tests {
         assert!(slugs.contains(&"openrouter"));
         assert!(slugs.contains(&"requesty"));
         assert!(slugs.contains(&"codex"));
+        assert!(slugs.contains(&"openai"));
     }
 
     #[test]
@@ -448,6 +465,161 @@ mod tests {
         assert_eq!(profile.purpose, EndpointPurpose::Coding);
         assert!(profile.supports_credential(CredentialKind::OAuthBearer));
         assert!(!profile.supports_credential(CredentialKind::ApiKey));
+    }
+
+    #[test]
+    fn test_openai_profile_metadata() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.profiles.get("openai").expect("openai");
+        assert_eq!(profile.family, ApiFamily::Responses);
+        assert_eq!(profile.base_url, "https://api.openai.com/v1");
+        assert!(profile.supports_credential(CredentialKind::ApiKey));
+        assert!(!profile.supports_credential(CredentialKind::OAuthBearer));
+        assert_eq!(profile.purpose, EndpointPurpose::General);
+    }
+
+    #[test]
+    fn test_openai_accepts_api_key() {
+        let registry = ProviderRegistry::default();
+        let result = registry.get("openai", RuntimeConfig::new("test-key"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_openai_and_codex_are_distinct() {
+        let registry = ProviderRegistry::default();
+        let openai = registry.profiles.get("openai").expect("openai");
+        let codex = registry.profiles.get("codex").expect("codex");
+
+        assert_ne!(openai.slug, codex.slug);
+        assert_eq!(openai.base_url, "https://api.openai.com/v1");
+        assert_eq!(codex.base_url, "https://chatgpt.com/backend-api/codex");
+        assert!(openai.supports_credential(CredentialKind::ApiKey));
+        assert!(!codex.supports_credential(CredentialKind::ApiKey));
+        assert!(!openai.supports_credential(CredentialKind::OAuthBearer));
+        assert!(codex.supports_credential(CredentialKind::OAuthBearer));
+        assert_eq!(openai.purpose, EndpointPurpose::General);
+        assert_eq!(codex.purpose, EndpointPurpose::Coding);
+    }
+
+    #[test]
+    fn test_openai_does_not_change_codex_behavior() {
+        let registry = ProviderRegistry::default();
+
+        let codex_api_key = registry.get("codex", RuntimeConfig::new("test-key"));
+        assert!(codex_api_key.is_err());
+        if let Err(ref e) = codex_api_key {
+            assert!(e.to_string().contains("does not support"));
+        }
+
+        let codex = registry.profiles.get("codex").expect("codex");
+        assert_eq!(codex.base_url, "https://chatgpt.com/backend-api/codex");
+        assert!(codex.supports_credential(CredentialKind::OAuthBearer));
+        assert!(!codex.supports_credential(CredentialKind::ApiKey));
+    }
+
+    #[test]
+    fn test_profiles_by_models_dev_id_returns_both_openai_profiles() {
+        let registry = ProviderRegistry::default();
+        let profiles = registry.profiles_by_models_dev_id("openai");
+        assert!(profiles.len() >= 2, "should have at least openai and codex");
+        let slugs: Vec<&str> = profiles.iter().map(|p| p.slug.as_str()).collect();
+        assert!(slugs.contains(&"codex"));
+        assert!(slugs.contains(&"openai"));
+    }
+
+    #[test]
+    fn test_profiles_by_models_dev_id_returns_sorted() {
+        let registry = ProviderRegistry::default();
+        let profiles = registry.profiles_by_models_dev_id("openai");
+        let slugs: Vec<&str> = profiles.iter().map(|p| p.slug.as_str()).collect();
+        let mut sorted = slugs.clone();
+        sorted.sort();
+        assert_eq!(slugs, sorted, "profiles should be sorted by slug");
+    }
+
+    #[test]
+    fn test_resolve_by_models_dev_id_is_deterministic() {
+        let registry = ProviderRegistry::default();
+        let first = registry.resolve_by_models_dev_id("openai");
+        let second = registry.resolve_by_models_dev_id("openai");
+        assert_eq!(
+            first.map(|p| p.slug.as_str()),
+            second.map(|p| p.slug.as_str()),
+            "repeated calls must return the same profile"
+        );
+    }
+
+    #[test]
+    fn test_profiles_by_models_dev_id_deterministic_order() {
+        let registry = ProviderRegistry::default();
+        let run1: Vec<&str> = registry
+            .profiles_by_models_dev_id("openai")
+            .iter()
+            .map(|p| p.slug.as_str())
+            .collect();
+        let run2: Vec<&str> = registry
+            .profiles_by_models_dev_id("openai")
+            .iter()
+            .map(|p| p.slug.as_str())
+            .collect();
+        assert_eq!(run1, run2, "order must be deterministic across calls");
+    }
+
+    #[test]
+    fn test_local_default_endpoint_unchanged() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.profiles.get("local").unwrap();
+        assert_eq!(profile.base_url, "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn test_local_with_base_url_override() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.profiles.get("local").unwrap().as_ref().clone();
+        let runtime = RuntimeConfig::none().with_base_url("http://localhost:1234/v1");
+        let conn =
+            crate::connection::ProviderConnection::from_profile(profile.clone(), runtime).unwrap();
+        assert_eq!(conn.effective_base_url(), "http://localhost:1234/v1");
+        assert_eq!(profile.base_url, "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn test_local_override_preserves_noauth() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.profiles.get("local").unwrap().as_ref().clone();
+        let runtime = RuntimeConfig::none().with_base_url("http://localhost:9999/v1");
+        let conn =
+            crate::connection::ProviderConnection::from_profile(profile.clone(), runtime).unwrap();
+        assert_eq!(conn.effective_base_url(), "http://localhost:9999/v1");
+        assert!(profile.supports_credential(CredentialKind::NoAuth));
+        assert!(profile.supports_credential(CredentialKind::ApiKey));
+        assert_eq!(profile.family, ApiFamily::Completions);
+    }
+
+    #[test]
+    fn test_local_override_preserves_api_key() {
+        let registry = ProviderRegistry::default();
+        let profile = registry.profiles.get("local").unwrap().as_ref().clone();
+        let runtime = RuntimeConfig::new("my-token").with_base_url("http://localhost:5555");
+        let conn =
+            crate::connection::ProviderConnection::from_profile(profile.clone(), runtime).unwrap();
+        assert_eq!(conn.effective_base_url(), "http://localhost:5555");
+        assert_eq!(profile.base_url, "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn test_local_registered_profile_unchanged_after_override() {
+        let registry = ProviderRegistry::default();
+        let profile_before = registry.profiles.get("local").unwrap().as_ref().clone();
+        let runtime = RuntimeConfig::none().with_base_url("http://custom:8080");
+        let _conn =
+            crate::connection::ProviderConnection::from_profile(profile_before.clone(), runtime)
+                .unwrap();
+        assert_eq!(profile_before.base_url, "http://localhost:11434/v1");
+        assert_eq!(profile_before.family, ApiFamily::Completions);
+        assert!(profile_before.supports_credential(CredentialKind::NoAuth));
+        assert!(profile_before.supports_credential(CredentialKind::ApiKey));
     }
 
     #[test]

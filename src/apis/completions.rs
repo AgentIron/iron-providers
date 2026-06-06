@@ -392,7 +392,8 @@ fn build_request_body(request: &InferenceRequest, stream: bool) -> serde_json::M
 
 pub(crate) async fn infer(
     client: Client,
-    profile: &ProviderProfile,
+    _profile: &ProviderProfile,
+    effective_base_url: &str,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
     request.validate_model()?;
@@ -400,7 +401,7 @@ pub(crate) async fn infer(
 
     let url = format!(
         "{}/chat/completions",
-        profile.base_url.trim_end_matches('/')
+        effective_base_url.trim_end_matches('/')
     );
     let response = client
         .post(&url)
@@ -424,7 +425,8 @@ pub(crate) async fn infer(
 
 pub(crate) async fn infer_stream(
     client: Client,
-    profile: &ProviderProfile,
+    _profile: &ProviderProfile,
+    effective_base_url: &str,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
     request.validate_model()?;
@@ -432,7 +434,7 @@ pub(crate) async fn infer_stream(
 
     let url = format!(
         "{}/chat/completions",
-        profile.base_url.trim_end_matches('/')
+        effective_base_url.trim_end_matches('/')
     );
     let response = client
         .post(&url)

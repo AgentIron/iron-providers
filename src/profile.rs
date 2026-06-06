@@ -205,6 +205,11 @@ pub struct RuntimeConfig {
     pub connect_timeout: Option<Duration>,
     /// Inter-chunk read timeout. `None` uses `DEFAULT_READ_TIMEOUT`.
     pub read_timeout: Option<Duration>,
+    /// Per-session base URL override. When `Some`, the provider connection
+    /// uses this URL instead of the profile's `base_url` for request targets.
+    /// Profile metadata (API family, auth, credentials, quirks, etc.) is
+    /// preserved from the upstream profile.
+    pub base_url_override: Option<String>,
 }
 
 impl RuntimeConfig {
@@ -219,6 +224,7 @@ impl RuntimeConfig {
             credential,
             connect_timeout: None,
             read_timeout: None,
+            base_url_override: None,
         }
     }
 
@@ -227,6 +233,7 @@ impl RuntimeConfig {
             credential: ProviderCredential::NoAuth,
             connect_timeout: None,
             read_timeout: None,
+            base_url_override: None,
         }
     }
 
@@ -241,6 +248,15 @@ impl RuntimeConfig {
     /// hanging indefinitely.
     pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
         self.read_timeout = Some(timeout);
+        self
+    }
+
+    /// Override the effective base URL for this session's provider connection.
+    /// When set, request targets use this URL instead of the profile's
+    /// `base_url`. Profile metadata (API family, auth, credentials, quirks,
+    /// etc.) is preserved from the upstream profile.
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url_override = Some(url.into());
         self
     }
 

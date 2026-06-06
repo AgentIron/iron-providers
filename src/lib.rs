@@ -46,7 +46,8 @@
 //! - **[`ProviderRegistry`]**: Registry for looking up providers by slug or
 //!   URL pattern, with built-in profiles for common providers. Includes
 //!   `local` for OpenAI-compatible local endpoints (Ollama, LM Studio, etc.)
-//!   via `/v1/chat/completions`, and `ollama-cloud` for the Ollama cloud API.
+//!   via `/v1/chat/completions`, `ollama-cloud` for the Ollama cloud API, and
+//!   `openai` for public OpenAI Responses API-key access.
 //!
 //! # Streaming
 //!

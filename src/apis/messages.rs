@@ -245,13 +245,14 @@ fn build_anthropic_request(request: &InferenceRequest, stream: bool) -> Anthropi
 
 pub(crate) async fn infer(
     client: Client,
-    profile: &ProviderProfile,
+    _profile: &ProviderProfile,
+    effective_base_url: &str,
     request: InferenceRequest,
 ) -> ProviderResult<Vec<ProviderEvent>> {
     request.validate_model()?;
     let body = build_anthropic_request(&request, false);
 
-    let url = format!("{}/v1/messages", profile.base_url.trim_end_matches('/'));
+    let url = format!("{}/v1/messages", effective_base_url.trim_end_matches('/'));
     let response = client
         .post(&url)
         .json(&body)
@@ -275,12 +276,13 @@ pub(crate) async fn infer(
 pub(crate) async fn infer_stream(
     client: Client,
     _profile: &ProviderProfile,
+    effective_base_url: &str,
     request: InferenceRequest,
 ) -> ProviderResult<BoxStream<'static, ProviderResult<ProviderEvent>>> {
     request.validate_model()?;
     let body = build_anthropic_request(&request, true);
 
-    let url = format!("{}/v1/messages", _profile.base_url.trim_end_matches('/'));
+    let url = format!("{}/v1/messages", effective_base_url.trim_end_matches('/'));
     let response = client
         .post(&url)
         .json(&body)

@@ -153,7 +153,7 @@ async fn test_completions_basic_response() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = completions::infer(client, &profile, request).await;
+    let result = completions::infer(client, &profile, &profile.base_url, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -187,7 +187,7 @@ async fn test_completions_tool_call_response() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = completions::infer(client, &profile, request).await;
+    let result = completions::infer(client, &profile, &profile.base_url, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -217,7 +217,7 @@ async fn test_anthropic_basic_response() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = messages::infer(client, &profile, request).await;
+    let result = messages::infer(client, &profile, &profile.base_url, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -250,7 +250,7 @@ async fn test_kimi_code_api_key_uses_x_api_key_header() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = messages::infer(client, &profile, request).await;
+    let result = messages::infer(client, &profile, &profile.base_url, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -283,7 +283,7 @@ async fn test_kimi_code_oauth_uses_bearer_header() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = messages::infer(client, &profile, request).await;
+    let result = messages::infer(client, &profile, &profile.base_url, request).await;
     mock.assert_async().await;
 
     assert!(result.is_ok());
@@ -339,7 +339,7 @@ async fn test_completions_error_handling() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = completions::infer(client, &profile, request).await;
+    let result = completions::infer(client, &profile, &profile.base_url, request).await;
     mock.assert_async().await;
 
     assert!(result.is_err());
@@ -366,7 +366,7 @@ async fn test_anthropic_error_handling() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let result = messages::infer(client, &profile, request).await;
+    let result = messages::infer(client, &profile, &profile.base_url, request).await;
     mock.assert_async().await;
 
     assert!(result.is_err());
@@ -398,7 +398,7 @@ async fn test_completions_stream() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -444,7 +444,7 @@ async fn test_anthropic_stream() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = messages::infer_stream(client, &profile, request)
+    let stream = messages::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -510,7 +510,7 @@ async fn test_responses_request_uses_structured_function_items() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let events = responses::infer(client, &profile, &overrides, request)
+    let events = responses::infer(client, &profile, &overrides, &profile.base_url, request)
         .await
         .unwrap();
 
@@ -548,7 +548,7 @@ async fn test_codex_responses_overrides_add_headers_and_fixed_body() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let events = responses::infer(client, &profile, &overrides, request)
+    let events = responses::infer(client, &profile, &overrides, &profile.base_url, request)
         .await
         .unwrap();
 
@@ -587,7 +587,7 @@ async fn test_responses_stream_text_and_tool_call() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = responses::infer_stream(client, &profile, &overrides, request)
+    let stream = responses::infer_stream(client, &profile, &overrides, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -640,7 +640,7 @@ async fn test_responses_stream_failed_emits_error_without_complete() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = responses::infer_stream(client, &profile, &overrides, request)
+    let stream = responses::infer_stream(client, &profile, &overrides, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -687,7 +687,7 @@ async fn test_completions_stream_tool_call_spans_multiple_chunks() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -750,7 +750,7 @@ async fn test_completions_stream_multiple_tool_calls_not_merged() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -810,7 +810,7 @@ async fn test_completions_stream_interleaved_text_and_tool_calls() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -893,7 +893,7 @@ async fn test_completions_stream_tool_calls_before_complete() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -952,7 +952,7 @@ async fn test_completions_stream_done_flushes_pending() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -1019,7 +1019,7 @@ async fn test_completions_stream_delayed_metadata() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -1066,7 +1066,7 @@ async fn test_completions_stream_missing_metadata_best_effort() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -1118,7 +1118,7 @@ async fn test_completions_stream_invalid_json_skipped() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -1163,7 +1163,7 @@ async fn test_completions_stream_empty_done() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -1201,7 +1201,7 @@ async fn test_anthropic_stream_invalid_json_skipped() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = messages::infer_stream(client, &profile, request)
+    let stream = messages::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
@@ -1258,7 +1258,7 @@ async fn test_completions_choice_request_tool_call() {
     );
 
     let client = build_test_client(&profile, &runtime).unwrap();
-    let stream = completions::infer_stream(client, &profile, request)
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
         .await
         .unwrap();
     let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
