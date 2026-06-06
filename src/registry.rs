@@ -71,9 +71,12 @@ impl ProviderRegistry {
     }
 
     pub fn resolve_by_models_dev_id(&self, models_dev_id: &str) -> Option<&ProviderProfile> {
-        self.profiles_by_models_dev_id(models_dev_id)
-            .into_iter()
-            .next()
+        let matches = self.profiles_by_models_dev_id(models_dev_id);
+        matches
+            .iter()
+            .copied()
+            .find(|p| p.slug.eq_ignore_ascii_case(models_dev_id))
+            .or_else(|| matches.into_iter().next())
     }
 
     pub fn profiles_by_models_dev_id(&self, models_dev_id: &str) -> Vec<&ProviderProfile> {
@@ -457,9 +460,7 @@ mod tests {
     #[test]
     fn test_codex_profile_metadata() {
         let registry = ProviderRegistry::default();
-        let profile = registry
-            .resolve_by_models_dev_id("openai")
-            .expect("codex uses models_dev_id = openai");
+        let profile = registry.profiles.get("codex").expect("codex profile");
         assert_eq!(profile.slug, "codex");
         assert_eq!(profile.family, ApiFamily::Responses);
         assert_eq!(profile.purpose, EndpointPurpose::Coding);
