@@ -44,6 +44,20 @@ struct AnthropicRequest {
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContentBlock>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +80,11 @@ struct AnthropicStreamEvent {
     delta: Option<AnthropicDelta>,
     content_block: Option<AnthropicContentBlock>,
     error: Option<AnthropicErrorBody>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+    /// Present on `message_start` events.
+    #[serde(default)]
+    message: Option<AnthropicMessageStart>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +93,12 @@ struct AnthropicDelta {
     delta_type: Option<String>,
     text: Option<String>,
     partial_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicMessageStart {
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +177,18 @@ fn build_anthropic_messages(request: &InferenceRequest) -> Vec<Value> {
     messages
 }
 
+fn map_anthropic_usage(usage: &AnthropicUsage) -> crate::TokenUsage {
+    crate::TokenUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: None,
+        cached_input_tokens: None,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        cache_read_input_tokens: usage.cache_read_input_tokens,
+        reasoning_output_tokens: None,
+    }
+}
+
 fn build_anthropic_tools(request: &InferenceRequest) -> Option<Vec<Value>> {
     if request.tools.is_empty() {
         return None;
@@ -182,6 +219,12 @@ fn map_tool_choice(request: &InferenceRequest) -> Option<Value> {
 
 fn response_to_events(response: AnthropicResponse) -> Vec<ProviderEvent> {
     let mut events = Vec::new();
+
+    if let Some(ref usage) = response.usage {
+        events.push(ProviderEvent::Usage {
+            usage: map_anthropic_usage(usage),
+        });
+    }
 
     for block in response.content {
         match block.block_type.as_str() {
@@ -376,6 +419,7 @@ enum AnthropicBlockState {
 #[derive(Debug, Default)]
 struct AnthropicStreamAssembler {
     blocks: std::collections::BTreeMap<u32, AnthropicBlockState>,
+    last_usage: Option<crate::TokenUsage>,
 }
 
 impl AnthropicStreamAssembler {
@@ -383,6 +427,15 @@ impl AnthropicStreamAssembler {
         let mut events = Vec::new();
 
         match event.event_type.as_str() {
+            "message_start" => {
+                if let Some(msg) = event.message {
+                    if let Some(usage) = msg.usage {
+                        let usage = map_anthropic_usage(&usage);
+                        self.last_usage = Some(usage.clone());
+                        events.push(Ok(ProviderEvent::Usage { usage }));
+                    }
+                }
+            }
             "content_block_delta" => {
                 if let Some(delta) = event.delta {
                     match delta.delta_type.as_deref() {
@@ -463,7 +516,17 @@ impl AnthropicStreamAssembler {
                     }
                 }
             }
+            "message_delta" => {
+                if let Some(usage) = event.usage {
+                    let usage = map_anthropic_usage(&usage);
+                    self.last_usage = Some(usage.clone());
+                    events.push(Ok(ProviderEvent::Usage { usage }));
+                }
+            }
             "message_stop" => {
+                if let Some(usage) = self.last_usage.take() {
+                    events.push(Ok(ProviderEvent::Usage { usage }));
+                }
                 events.push(Ok(ProviderEvent::Complete));
             }
             "error" => {

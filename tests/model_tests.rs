@@ -1,8 +1,8 @@
 //! Tests for iron-providers models
 
 use iron_providers::model::{
-    GenerationConfig, InferenceRequest, Message, ProviderEvent, ToolCall, ToolDefinition,
-    ToolPolicy, Transcript,
+    GenerationConfig, InferenceRequest, Message, ProviderEvent, TokenUsage, ToolCall,
+    ToolDefinition, ToolPolicy, Transcript,
 };
 use serde_json::json;
 
@@ -115,6 +115,17 @@ fn test_provider_event_variants() {
     let output = ProviderEvent::Output {
         content: "hello".to_string(),
     };
+    let usage = ProviderEvent::Usage {
+        usage: TokenUsage {
+            input_tokens: Some(10),
+            output_tokens: Some(5),
+            total_tokens: Some(15),
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+            reasoning_output_tokens: None,
+        },
+    };
     let complete = ProviderEvent::Complete;
 
     match status {
@@ -124,6 +135,14 @@ fn test_provider_event_variants() {
 
     match output {
         ProviderEvent::Output { content } => assert_eq!(content, "hello"),
+        _ => panic!("Wrong variant"),
+    }
+
+    match usage {
+        ProviderEvent::Usage { usage } => {
+            assert_eq!(usage.input_tokens, Some(10));
+            assert_eq!(usage.output_tokens, Some(5));
+        }
         _ => panic!("Wrong variant"),
     }
 
@@ -147,4 +166,43 @@ fn test_inference_request_builder() {
 
     assert_eq!(req.instructions, Some("Be helpful".to_string()));
     assert_eq!(req.tool_policy, ToolPolicy::Required);
+}
+
+#[test]
+fn test_token_usage_roundtrip() {
+    let usage = TokenUsage {
+        input_tokens: Some(100),
+        output_tokens: Some(50),
+        total_tokens: Some(150),
+        cached_input_tokens: Some(25),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: Some(10),
+        reasoning_output_tokens: None,
+    };
+    let json = serde_json::to_string(&usage).expect("serialize");
+    let parsed: TokenUsage = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed.input_tokens, Some(100));
+    assert_eq!(parsed.output_tokens, Some(50));
+    assert_eq!(parsed.total_tokens, Some(150));
+    assert_eq!(parsed.cached_input_tokens, Some(25));
+    assert_eq!(parsed.cache_creation_input_tokens, None);
+    assert_eq!(parsed.cache_read_input_tokens, Some(10));
+    assert_eq!(parsed.reasoning_output_tokens, None);
+}
+
+#[test]
+fn test_provider_event_usage_serialization() {
+    let event = ProviderEvent::Usage {
+        usage: TokenUsage {
+            input_tokens: Some(10),
+            output_tokens: Some(5),
+            total_tokens: Some(15),
+            ..TokenUsage::default()
+        },
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    assert!(json.contains("usage"));
+    assert!(json.contains("input_tokens"));
+    let parsed: ProviderEvent = serde_json::from_str(&json).expect("deserialize");
+    assert!(matches!(parsed, ProviderEvent::Usage { usage } if usage.input_tokens == Some(10)));
 }

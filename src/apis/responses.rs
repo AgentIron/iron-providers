@@ -92,8 +92,33 @@ struct ReasoningConfig {
 struct ResponsesResponse {
     output: Vec<OutputItem>,
     #[serde(default)]
+    usage: Option<ResponsesUsage>,
+    #[serde(default)]
     #[allow(dead_code)]
     error: Option<ResponsesError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesUsage {
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+    #[serde(default)]
+    input_tokens_details: Option<ResponsesInputTokensDetails>,
+    #[serde(default)]
+    output_tokens_details: Option<ResponsesOutputTokensDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesInputTokensDetails {
+    #[serde(default)]
+    cached_tokens: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesOutputTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,12 +178,29 @@ struct ResponsesStreamEvent {
 #[derive(Debug, Deserialize)]
 struct ResponsesStreamResponse {
     #[serde(default)]
+    usage: Option<ResponsesUsage>,
+    #[serde(default)]
     error: Option<ResponsesError>,
 }
 
 // ────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────
+
+fn map_responses_usage(usage: &ResponsesUsage) -> crate::TokenUsage {
+    crate::TokenUsage {
+        input_tokens: Some(usage.input_tokens),
+        output_tokens: Some(usage.output_tokens),
+        total_tokens: Some(usage.total_tokens),
+        cached_input_tokens: usage.input_tokens_details.as_ref().map(|d| d.cached_tokens),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+        reasoning_output_tokens: usage
+            .output_tokens_details
+            .as_ref()
+            .map(|d| d.reasoning_tokens),
+    }
+}
 
 fn build_input_items(request: &InferenceRequest) -> Vec<InputItem> {
     let mut items = Vec::new();
@@ -277,6 +319,12 @@ fn build_request(
 
 fn response_to_events(response: ResponsesResponse) -> Vec<ProviderEvent> {
     let mut events = Vec::new();
+
+    if let Some(ref usage) = response.usage {
+        events.push(ProviderEvent::Usage {
+            usage: map_responses_usage(usage),
+        });
+    }
 
     for item in response.output {
         match item.item_type.as_str() {
@@ -557,6 +605,13 @@ impl crate::stream_util::SseStreamAdapter for ResponsesSseAdapter {
                 }
             }
             "response.completed" => {
+                if let Some(response) = event.response {
+                    if let Some(usage) = response.usage {
+                        events.push(Ok(ProviderEvent::Usage {
+                            usage: map_responses_usage(&usage),
+                        }));
+                    }
+                }
                 events.push(Ok(ProviderEvent::Complete));
             }
             "error" => {
