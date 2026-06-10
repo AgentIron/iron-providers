@@ -209,6 +209,10 @@ calling `infer`. There is no `stream` field on `InferenceRequest`.
 - `Complete` means the stream ended successfully.
 - If a provider emits an unrecoverable `Error`, the stream ends without a later
   `Complete` event.
+- `Usage` events, when present, carry cumulative provider-reported token usage
+  snapshots for the current request. If a stream emits multiple usage snapshots,
+  consumers should treat the latest snapshot as superseding earlier snapshots,
+  not as an additive delta.
 
 This contract now holds across OpenAI Responses, Chat Completions, and
 Anthropic adapters.
@@ -229,7 +233,7 @@ Anthropic adapters.
 - `RuntimeConfig` — API key and optional default model for a session.
 - `InferenceRequest` — Normalized request with model, context, tools, and generation config.
 - `InferenceContext` — Separates model-visible `Transcript` from runtime-only `RuntimeRecord` values.
-- `ProviderEvent` — Streamed events: `Output`, `ToolCall`, `ChoiceRequest`, `Complete`, `Error`, `Status`. `Complete` is success-only. `Error` carries a structured `ProviderError` with classification (auth, rate-limit, transport, etc.).
+- `ProviderEvent` — Streamed events: `Output`, `ToolCall`, `ChoiceRequest`, `Usage`, `Complete`, `Error`, `Status`. `Usage` carries cumulative provider-reported token usage when available. `Complete` is success-only. `Error` carries a structured `ProviderError` with classification (auth, rate-limit, transport, etc.).
 - `Transcript` / `Message` — Conversation history in provider-agnostic format.
 - `ToolDefinition` / `ToolPolicy` — Tool schema and usage policy.
 - `GenerationConfig` — Temperature, max tokens, top-p, stop sequences.

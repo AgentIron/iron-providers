@@ -140,6 +140,31 @@ fn map_tool_choice(request: &InferenceRequest) -> Option<Value> {
 #[derive(Debug, Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatChoice>,
+    #[serde(default)]
+    usage: Option<ChatCompletionUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionUsage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    #[serde(default)]
+    prompt_tokens_details: Option<ChatCompletionPromptTokensDetails>,
+    #[serde(default)]
+    completion_tokens_details: Option<ChatCompletionCompletionTokensDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionPromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionCompletionTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,6 +193,8 @@ struct ChatFunction {
 #[derive(Debug, Deserialize)]
 struct ChatCompletionStreamChunk {
     choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<ChatCompletionUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -207,6 +234,24 @@ struct ToolCallAccumulator {
 #[derive(Debug, Default)]
 struct ChoiceAccumulator {
     tool_calls: BTreeMap<u32, ToolCallAccumulator>,
+}
+
+fn map_chat_completion_usage(usage: &ChatCompletionUsage) -> crate::TokenUsage {
+    crate::TokenUsage {
+        input_tokens: Some(usage.prompt_tokens),
+        output_tokens: Some(usage.completion_tokens),
+        total_tokens: Some(usage.total_tokens),
+        cached_input_tokens: usage
+            .prompt_tokens_details
+            .as_ref()
+            .map(|d| d.cached_tokens),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+        reasoning_output_tokens: usage
+            .completion_tokens_details
+            .as_ref()
+            .map(|d| d.reasoning_tokens),
+    }
 }
 
 #[derive(Debug, Default)]
@@ -321,6 +366,12 @@ impl StreamAssembler {
 
 fn response_to_events(response: ChatCompletionResponse) -> Vec<ProviderEvent> {
     let mut events = Vec::new();
+
+    if let Some(ref usage) = response.usage {
+        events.push(ProviderEvent::Usage {
+            usage: map_chat_completion_usage(usage),
+        });
+    }
 
     for choice in response.choices {
         if let Some(ref content) = choice.message.content {
@@ -505,6 +556,12 @@ impl StreamAssembler {
         chunk: ChatCompletionStreamChunk,
     ) -> Vec<ProviderResult<ProviderEvent>> {
         let mut events = Vec::new();
+
+        if let Some(usage) = chunk.usage {
+            events.push(Ok(ProviderEvent::Usage {
+                usage: map_chat_completion_usage(&usage),
+            }));
+        }
 
         for choice in chunk.choices {
             let choice_index = choice.index;

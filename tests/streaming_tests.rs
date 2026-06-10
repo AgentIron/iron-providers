@@ -1,7 +1,7 @@
 //! Tests for streaming behavior and completed tool calls
 
 use iron_providers::{
-    model::{ProviderEvent, ToolCall},
+    model::{ProviderEvent, TokenUsage, ToolCall},
     GenerationConfig, InferenceRequest, Message, ProviderError, ToolDefinition, ToolPolicy,
     Transcript,
 };
@@ -60,6 +60,30 @@ fn test_provider_event_status() {
     match event {
         ProviderEvent::Status { message } => assert_eq!(message, "Thinking..."),
         _ => panic!("Expected Status event"),
+    }
+}
+
+#[test]
+fn test_provider_event_usage() {
+    let usage = TokenUsage {
+        input_tokens: Some(100),
+        output_tokens: Some(50),
+        total_tokens: Some(150),
+        cached_input_tokens: Some(25),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: Some(10),
+        reasoning_output_tokens: None,
+    };
+    let event = ProviderEvent::Usage { usage };
+    match event {
+        ProviderEvent::Usage { usage } => {
+            assert_eq!(usage.input_tokens, Some(100));
+            assert_eq!(usage.output_tokens, Some(50));
+            assert_eq!(usage.total_tokens, Some(150));
+            assert_eq!(usage.cached_input_tokens, Some(25));
+            assert_eq!(usage.cache_read_input_tokens, Some(10));
+        }
+        _ => panic!("Expected Usage event"),
     }
 }
 

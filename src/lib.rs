@@ -76,8 +76,8 @@ pub use connection::ProviderConnection;
 pub use error::{ProviderError, ProviderResult};
 pub use model::{
     ChoiceItem, ChoiceRequest, ChoiceSelectionMode, GenerationConfig, InferenceContext,
-    InferenceRequest, Message, ProviderEvent, RuntimeRecord, ToolCall, ToolDefinition, ToolPolicy,
-    Transcript, CHOICE_REQUEST_TOOL_NAME,
+    InferenceRequest, Message, ProviderEvent, RuntimeRecord, TokenUsage, ToolCall, ToolDefinition,
+    ToolPolicy, Transcript, CHOICE_REQUEST_TOOL_NAME,
 };
 pub use profile::{
     ApiFamily, AuthStrategy, CredentialAuthConfig, CredentialKind, EndpointPurpose,
@@ -91,7 +91,7 @@ pub mod prelude {
         ApiFamily, AuthStrategy, ChoiceItem, ChoiceRequest, ChoiceSelectionMode, CredentialKind,
         EndpointPurpose, GenerationConfig, InferenceContext, InferenceRequest, Message, Provider,
         ProviderCredential, ProviderError, ProviderEvent, ProviderProfile, ProviderRegistry,
-        ProviderResult, RuntimeConfig, RuntimeConfigSource, RuntimeRecord, ToolCall,
+        ProviderResult, RuntimeConfig, RuntimeConfigSource, RuntimeRecord, TokenUsage, ToolCall,
         ToolDefinition, ToolPolicy, Transcript, CHOICE_REQUEST_TOOL_NAME,
     };
 }

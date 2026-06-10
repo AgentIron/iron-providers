@@ -238,6 +238,43 @@ impl ToolCall {
     }
 }
 
+/// Normalized provider-reported token usage for a single inference request.
+///
+/// All fields are optional because provider families differ in what they
+/// return.  When present, each value represents the provider's cumulative
+/// snapshot for the current request, not an incremental delta.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    /// Input or prompt tokens reported by the provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    /// Output or completion tokens reported by the provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    /// Total tokens reported by the provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    /// Cached input tokens reported by OpenAI-style providers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+    /// Cache creation input tokens reported by Anthropic-style providers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    /// Cache read input tokens reported by Anthropic-style providers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    /// Reasoning or thinking output tokens reported by the provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_output_tokens: Option<u64>,
+}
+
+impl TokenUsage {
+    /// Create an empty usage snapshot.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// Events emitted by the provider during streaming
 ///
 /// ## Stream termination contract
@@ -246,6 +283,9 @@ impl ToolCall {
 /// - If a provider encounters an unrecoverable error, the stream ends
 ///   with `Error` and does **not** emit `Complete`.
 /// - `Status` events are informational and do not affect termination.
+/// - `Usage` events carry cumulative provider-reported token usage.  When
+///   multiple `Usage` events appear for the same request, the latest one
+///   supersedes earlier snapshots rather than being additive.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderEvent {
@@ -257,6 +297,12 @@ pub enum ProviderEvent {
     ToolCall { call: ToolCall },
     /// Structured model-originated choice request.
     ChoiceRequest { request: ChoiceRequest },
+    /// Provider-reported token usage snapshot.
+    ///
+    /// Represents the provider's cumulative usage for the current request.
+    /// Consumers should treat later `Usage` events as superseding earlier
+    /// ones rather than adding them together.
+    Usage { usage: TokenUsage },
     /// Stream completed successfully.
     ///
     /// This event is emitted exactly once per successful stream and is
