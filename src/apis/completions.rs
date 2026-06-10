@@ -146,9 +146,9 @@ struct ChatCompletionResponse {
 
 #[derive(Debug, Deserialize)]
 struct ChatCompletionUsage {
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    total_tokens: u64,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    total_tokens: Option<u64>,
     #[serde(default)]
     prompt_tokens_details: Option<ChatCompletionPromptTokensDetails>,
     #[serde(default)]
@@ -157,14 +157,12 @@ struct ChatCompletionUsage {
 
 #[derive(Debug, Deserialize)]
 struct ChatCompletionPromptTokensDetails {
-    #[serde(default)]
-    cached_tokens: u64,
+    cached_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatCompletionCompletionTokensDetails {
-    #[serde(default)]
-    reasoning_tokens: u64,
+    reasoning_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -238,19 +236,19 @@ struct ChoiceAccumulator {
 
 fn map_chat_completion_usage(usage: &ChatCompletionUsage) -> crate::TokenUsage {
     crate::TokenUsage {
-        input_tokens: Some(usage.prompt_tokens),
-        output_tokens: Some(usage.completion_tokens),
-        total_tokens: Some(usage.total_tokens),
+        input_tokens: usage.prompt_tokens,
+        output_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
         cached_input_tokens: usage
             .prompt_tokens_details
             .as_ref()
-            .map(|d| d.cached_tokens),
+            .and_then(|d| d.cached_tokens),
         cache_creation_input_tokens: None,
         cache_read_input_tokens: None,
         reasoning_output_tokens: usage
             .completion_tokens_details
             .as_ref()
-            .map(|d| d.reasoning_tokens),
+            .and_then(|d| d.reasoning_tokens),
     }
 }
 

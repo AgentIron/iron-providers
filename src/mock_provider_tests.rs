@@ -327,6 +327,130 @@ async fn test_completions_stream_usage() {
 }
 
 #[tokio::test]
+async fn test_completions_partial_usage_response() {
+    let mut server = mockito::Server::new_async().await;
+
+    let body = serde_json::to_string(&json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Hello"
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5
+        }
+    }))
+    .unwrap();
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("hi")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let result = completions::infer(client, &profile, &profile.base_url, request).await;
+    mock.assert_async().await;
+
+    assert!(result.is_ok());
+    let events = result.unwrap();
+
+    let usage_events: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            ProviderEvent::Usage { usage } => Some(usage.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(usage_events.len(), 1);
+    assert_eq!(usage_events[0].input_tokens, Some(10));
+    assert_eq!(usage_events[0].output_tokens, Some(5));
+    assert_eq!(usage_events[0].total_tokens, None);
+    assert_eq!(usage_events[0].cached_input_tokens, None);
+    assert_eq!(usage_events[0].reasoning_output_tokens, None);
+
+    let usage_idx = events
+        .iter()
+        .position(|e| matches!(e, ProviderEvent::Usage { .. }))
+        .unwrap();
+    let complete_idx = events
+        .iter()
+        .position(|e| matches!(e, ProviderEvent::Complete))
+        .unwrap();
+    assert!(usage_idx < complete_idx);
+}
+
+#[tokio::test]
+async fn test_completions_partial_usage_stream() {
+    let mut server = mockito::Server::new_async().await;
+
+    let sse_body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\n\
+                    data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5}}\n\n\
+                    data: [DONE]\n\n";
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let profile = completions_profile("zai", &server.url());
+    let runtime = RuntimeConfig::new("test-key");
+    let request = InferenceRequest::new(
+        "zai-model",
+        Transcript::with_messages(vec![Message::user("hi")]),
+    );
+
+    let client = build_test_client(&profile, &runtime).unwrap();
+    let stream = completions::infer_stream(client, &profile, &profile.base_url, request)
+        .await
+        .unwrap();
+    let events: Vec<_> = futures::executor::block_on_stream(stream).collect();
+
+    mock.assert_async().await;
+
+    let usage_events: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ProviderEvent::Usage { usage }) => Some(usage.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(usage_events.len(), 1);
+    assert_eq!(usage_events[0].input_tokens, Some(5));
+    assert_eq!(usage_events[0].output_tokens, None);
+    assert_eq!(usage_events[0].total_tokens, None);
+    assert_eq!(usage_events[0].cached_input_tokens, None);
+    assert_eq!(usage_events[0].reasoning_output_tokens, None);
+
+    let usage_idx = events
+        .iter()
+        .position(|e| matches!(e, Ok(ProviderEvent::Usage { .. })))
+        .unwrap();
+    let complete_idx = events
+        .iter()
+        .position(|e| matches!(e, Ok(ProviderEvent::Complete)))
+        .unwrap();
+    assert!(usage_idx < complete_idx);
+}
+
+#[tokio::test]
 async fn test_anthropic_usage_response() {
     let mut server = mockito::Server::new_async().await;
 
