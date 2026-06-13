@@ -18,7 +18,7 @@ The provider registry SHALL include a built-in `ollama-cloud` provider profile t
 #### Scenario: ollama-cloud uses Completions API family
 - **WHEN** the `ollama-cloud` profile is examined
 - **THEN** its `family` is `ApiFamily::Completions`
-- **AND** its `base_url` is `https://api.ollama.cloud`
+- **AND** its `base_url` is `https://ollama.com/v1`
 
 #### Scenario: ollama-cloud uses BearerToken auth
 - **WHEN** a runtime config is supplied for `ollama-cloud`
