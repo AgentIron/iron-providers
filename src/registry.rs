@@ -222,7 +222,7 @@ impl ProviderRegistry {
         self.register(ProviderProfile::new(
             "ollama-cloud",
             ApiFamily::Completions,
-            "https://api.ollama.cloud",
+            "https://ollama.com/v1",
         ));
 
         {
@@ -702,7 +702,7 @@ mod tests {
         let registry = ProviderRegistry::default();
         let profile = registry.profiles.get("ollama-cloud").unwrap();
         assert_eq!(profile.family, ApiFamily::Completions);
-        assert_eq!(profile.base_url, "https://api.ollama.cloud");
+        assert_eq!(profile.base_url, "https://ollama.com/v1");
         assert!(profile.supports_credential(CredentialKind::ApiKey));
     }
 
