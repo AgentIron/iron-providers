@@ -108,6 +108,8 @@ pub struct ProviderProfile {
     pub purpose: EndpointPurpose,
     #[serde(default)]
     pub quirks: ProviderQuirks,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_guidance: Option<String>,
 }
 
 impl ProviderProfile {
@@ -124,6 +126,7 @@ impl ProviderProfile {
             default_headers: HashMap::new(),
             purpose: EndpointPurpose::General,
             quirks: ProviderQuirks::default(),
+            provider_guidance: None,
         }
     }
 
@@ -184,11 +187,25 @@ impl ProviderProfile {
         self
     }
 
+    /// Set provider-specific system prompt guidance that overrides the
+    /// API-family fallback fragment.
+    pub fn with_provider_guidance(mut self, guidance: impl Into<String>) -> Self {
+        self.provider_guidance = Some(guidance.into());
+        self
+    }
+
     pub fn models_dev_slug(&self) -> &str {
         self.models_dev_id.as_deref().unwrap_or(&self.slug)
     }
 
-    pub fn system_prompt_fragment(&self) -> &'static str {
+    /// Resolve provider-specific system prompt guidance.
+    ///
+    /// If the profile has explicit `provider_guidance`, returns that value.
+    /// Otherwise falls back to the compiled API-family-level fragment.
+    pub fn system_prompt_fragment(&self) -> &str {
+        if let Some(ref guidance) = self.provider_guidance {
+            return guidance;
+        }
         match self.family {
             ApiFamily::Messages => crate::apis::messages::SYSTEM_PROMPT_FRAGMENT,
             ApiFamily::Responses | ApiFamily::Completions => {
@@ -425,5 +442,85 @@ mod tests {
             profile.auth_strategy_for(CredentialKind::NoAuth),
             Some(&AuthStrategy::NoAuth)
         );
+    }
+
+    #[test]
+    fn test_provider_guidance_default_is_none() {
+        let profile = ProviderProfile::new("test", ApiFamily::Completions, "https://example.com");
+        assert!(profile.provider_guidance.is_none());
+    }
+
+    #[test]
+    fn test_provider_guidance_builder_sets_value() {
+        let profile = ProviderProfile::new("test", ApiFamily::Completions, "https://example.com")
+            .with_provider_guidance("Use this provider like so.");
+        assert_eq!(
+            profile.provider_guidance.as_deref(),
+            Some("Use this provider like so.")
+        );
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_uses_provider_guidance_when_set() {
+        let custom = "Custom provider guidance.";
+        let profile = ProviderProfile::new("test", ApiFamily::Messages, "https://example.com")
+            .with_provider_guidance(custom);
+        assert_eq!(profile.system_prompt_fragment(), custom);
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_falls_back_to_family_fragment() {
+        let profile = ProviderProfile::new("test", ApiFamily::Messages, "https://example.com");
+        assert_eq!(
+            profile.system_prompt_fragment(),
+            crate::apis::messages::SYSTEM_PROMPT_FRAGMENT
+        );
+
+        let profile = ProviderProfile::new("test", ApiFamily::Completions, "https://example.com");
+        assert_eq!(
+            profile.system_prompt_fragment(),
+            crate::apis::completions::SYSTEM_PROMPT_FRAGMENT
+        );
+
+        let profile = ProviderProfile::new("test", ApiFamily::Responses, "https://example.com");
+        assert_eq!(
+            profile.system_prompt_fragment(),
+            crate::apis::completions::SYSTEM_PROMPT_FRAGMENT
+        );
+    }
+
+    #[test]
+    fn test_profile_serialization_omits_provider_guidance_when_none() {
+        let profile = ProviderProfile::new("test", ApiFamily::Completions, "https://example.com");
+        let json = serde_json::to_string(&profile).expect("serialize");
+        assert!(!json.contains("provider_guidance"));
+        let parsed: ProviderProfile = serde_json::from_str(&json).expect("deserialize");
+        assert!(parsed.provider_guidance.is_none());
+    }
+
+    #[test]
+    fn test_profile_serialization_roundtrips_provider_guidance() {
+        let profile = ProviderProfile::new("test", ApiFamily::Completions, "https://example.com")
+            .with_provider_guidance("Custom guidance.");
+        let json = serde_json::to_string(&profile).expect("serialize");
+        assert!(json.contains("provider_guidance"));
+        let parsed: ProviderProfile = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            parsed.provider_guidance.as_deref(),
+            Some("Custom guidance.")
+        );
+    }
+
+    #[test]
+    fn test_profile_deserialization_without_provider_guidance_field() {
+        let json = r#"{
+            "slug": "test",
+            "family": "Responses",
+            "base_url": "https://example.com",
+            "credential_auth": [{"kind": "ApiKey", "auth_strategy": "BearerToken"}],
+            "purpose": "General"
+        }"#;
+        let parsed: ProviderProfile = serde_json::from_str(json).expect("deserialize");
+        assert!(parsed.provider_guidance.is_none());
     }
 }

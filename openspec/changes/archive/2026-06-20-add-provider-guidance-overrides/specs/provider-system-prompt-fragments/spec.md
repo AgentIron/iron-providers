@@ -1,21 +1,4 @@
-## Purpose
-
-Defines how provider-specific Markdown system prompt guidance is exposed by
-provider modules, provider profiles, and the provider registry for callers that
-compose higher-level prompt templates.
-
-## Requirements
-
-### Requirement: Provider modules SHALL expose static prompt fragments
-Provider modules with direct public provider APIs SHALL expose their provider-specific system prompt guidance as raw Markdown `&'static str` values.
-
-#### Scenario: Anthropic module exposes a fragment
-- **WHEN** a caller invokes `anthropic::system_prompt_fragment()`
-- **THEN** the function returns the Anthropic system prompt fragment as a non-empty `&'static str`
-
-#### Scenario: OpenAI module exposes a fragment
-- **WHEN** a caller invokes `openai::system_prompt_fragment()`
-- **THEN** the function returns the OpenAI-compatible system prompt fragment as a non-empty `&'static str`
+## MODIFIED Requirements
 
 ### Requirement: Profile fragments SHALL use provider guidance before API-family fallback
 `ProviderProfile` SHALL expose `system_prompt_fragment(&self) -> &str`. If the profile has per-profile provider guidance, the method SHALL return that guidance. Otherwise, it SHALL select the fallback fragment from the profile's `ApiFamily`.
@@ -46,13 +29,13 @@ Provider modules with direct public provider APIs SHALL expose their provider-sp
 - **WHEN** a caller requests the system prompt fragment for that profile's slug
 - **THEN** the registry returns the custom profile guidance
 
-#### Scenario: Default registry providers resolve fragments
+#### Scenario: Default registry providers continue resolving fragments
 - **WHEN** a caller requests the system prompt fragment for any default registry slug
 - **THEN** the registry returns a non-empty fragment for that provider
 
-#### Scenario: Registry lookup is case-insensitive
+#### Scenario: Registry lookup remains case-insensitive
 - **WHEN** a caller requests a registered provider name using different letter casing
-- **THEN** the registry returns the same fragment as the canonical lowercase slug
+- **THEN** the registry returns the same resolved fragment as the canonical lowercase slug
 
 #### Scenario: Unknown registry provider returns an error
 - **WHEN** a caller requests a system prompt fragment for a provider name that is not registered
@@ -84,22 +67,3 @@ Serialized provider profiles MAY include optional `provider_guidance`. Profiles 
 - **GIVEN** a provider profile without `provider_guidance`
 - **WHEN** it is serialized
 - **THEN** the serialized data omits `provider_guidance`
-
-### Requirement: Prompt fragments SHALL be safe for caller-side template injection
-Prompt fragments SHALL be raw Markdown text suitable for caller-side prompt-template injection and SHALL NOT contain Tera syntax delimiters.
-
-#### Scenario: Fragments contain no expression delimiters
-- **WHEN** tests inspect every prompt fragment shipped by this crate
-- **THEN** no fragment contains `{{`
-
-#### Scenario: Fragments contain no block delimiters
-- **WHEN** tests inspect every prompt fragment shipped by this crate
-- **THEN** no fragment contains `{%`
-
-#### Scenario: Fragments contain no comment delimiters
-- **WHEN** tests inspect every prompt fragment shipped by this crate
-- **THEN** no fragment contains `{#`
-
-#### Scenario: Fragments remain raw Markdown
-- **WHEN** a caller retrieves a prompt fragment
-- **THEN** the returned string is raw Markdown and this crate performs no template rendering
