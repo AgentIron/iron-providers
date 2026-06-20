@@ -11,7 +11,19 @@ use serde_json::Value;
 /// choice requests into first-class `ProviderEvent::ChoiceRequest` events.
 pub const CHOICE_REQUEST_TOOL_NAME: &str = "runtime.request_choice";
 
-/// A transcript of conversation messages
+/// A transcript of conversation messages.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::{Message, Transcript};
+///
+/// let transcript = Transcript::with_messages(vec![
+///     Message::user("Hello"),
+///     Message::assistant("Hi there"),
+/// ]);
+/// assert!(!transcript.is_empty());
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Transcript {
     /// Ordered conversation messages.
@@ -40,14 +52,30 @@ impl Transcript {
     }
 }
 
-/// A message in the conversation transcript
+/// A message in the conversation transcript.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::Message;
+/// use serde_json::json;
+///
+/// let user = Message::user("What is the weather?");
+/// let tool = Message::tool("call-1", "get_weather", json!({"city": "Berlin"}));
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum Message {
     /// User message with text content
-    User { content: String },
+    User {
+        /// Text content of the user message.
+        content: String,
+    },
     /// Assistant message with text content
-    Assistant { content: String },
+    Assistant {
+        /// Text content of the assistant message.
+        content: String,
+    },
     /// Assistant tool call (the model requesting to call a tool)
     AssistantToolCall {
         /// Stable tool call identifier.
@@ -101,15 +129,20 @@ impl Message {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChoiceSelectionMode {
+    /// Caller must select exactly one item.
     Single,
+    /// Caller may select zero or more items.
     Multiple,
 }
 
 /// One selectable item in a provider-originated choice request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChoiceItem {
+    /// Stable identifier for the selectable item.
     pub id: String,
+    /// Human-readable label shown to the caller.
     pub label: String,
+    /// Optional longer description of the item.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
@@ -117,8 +150,11 @@ pub struct ChoiceItem {
 /// A first-class model-originated choice request surfaced by the provider/runtime layer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChoiceRequest {
+    /// Prompt text describing what the caller is being asked to choose.
     pub prompt: String,
+    /// Whether the caller must pick one or may pick multiple items.
     pub selection_mode: ChoiceSelectionMode,
+    /// Selectable items.
     pub items: Vec<ChoiceItem>,
 }
 
@@ -129,7 +165,20 @@ impl ChoiceRequest {
     }
 }
 
-/// Model-facing tool definition
+/// Model-facing tool definition.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::ToolDefinition;
+/// use serde_json::json;
+///
+/// let tool = ToolDefinition::new(
+///     "get_weather",
+///     "Get current weather for a city",
+///     json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+/// );
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     /// Unique tool name.
@@ -155,7 +204,15 @@ impl ToolDefinition {
     }
 }
 
-/// Tool choice policy
+/// Tool choice policy.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::ToolPolicy;
+///
+/// let policy = ToolPolicy::Specific("get_weather".to_string());
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPolicy {
@@ -170,7 +227,18 @@ pub enum ToolPolicy {
     Specific(String),
 }
 
-/// Normalized generation configuration
+/// Normalized generation configuration.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::GenerationConfig;
+///
+/// let config = GenerationConfig::new()
+///     .with_temperature(0.7)
+///     .with_max_tokens(2048)
+///     .with_top_p(0.95);
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GenerationConfig {
     /// Temperature for sampling (0.0 to 2.0)
@@ -275,7 +343,7 @@ impl TokenUsage {
     }
 }
 
-/// Events emitted by the provider during streaming
+/// Events emitted by the provider during streaming.
 ///
 /// ## Stream termination contract
 ///
@@ -290,19 +358,34 @@ impl TokenUsage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderEvent {
     /// Status update
-    Status { message: String },
+    Status {
+        /// Informational status message.
+        message: String,
+    },
     /// Incremental text output
-    Output { content: String },
+    Output {
+        /// Text fragment produced by the model.
+        content: String,
+    },
     /// Completed tool call
-    ToolCall { call: ToolCall },
+    ToolCall {
+        /// Normalized tool call record.
+        call: ToolCall,
+    },
     /// Structured model-originated choice request.
-    ChoiceRequest { request: ChoiceRequest },
+    ChoiceRequest {
+        /// The choice request details.
+        request: ChoiceRequest,
+    },
     /// Provider-reported token usage snapshot.
     ///
     /// Represents the provider's cumulative usage for the current request.
     /// Consumers should treat later `Usage` events as superseding earlier
     /// ones rather than adding them together.
-    Usage { usage: TokenUsage },
+    Usage {
+        /// Cumulative token usage snapshot.
+        usage: TokenUsage,
+    },
     /// Stream completed successfully.
     ///
     /// This event is emitted exactly once per successful stream and is
@@ -316,7 +399,10 @@ pub enum ProviderEvent {
     ///
     /// If this represents an unrecoverable error, the stream ends
     /// without a subsequent `Complete` event.
-    Error { source: crate::ProviderError },
+    Error {
+        /// The structured provider error.
+        source: crate::ProviderError,
+    },
 }
 
 /// A runtime-owned record that is **not** model-visible.
@@ -378,7 +464,20 @@ impl InferenceContext {
     }
 }
 
-/// Semantic inference request
+/// Semantic inference request.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::{GenerationConfig, InferenceRequest, Message, Transcript};
+///
+/// let request = InferenceRequest::new(
+///     "claude-sonnet-4-20250514",
+///     Transcript::with_messages(vec![Message::user("Hello")]),
+/// )
+/// .with_instructions("Be concise.")
+/// .with_generation(GenerationConfig::new().with_temperature(0.5));
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InferenceRequest {
     /// Model identifier

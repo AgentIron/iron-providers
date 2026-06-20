@@ -16,6 +16,7 @@ pub trait Provider: Send + Sync {
     /// Perform a non-streaming inference request and collect all events.
     fn infer(&self, request: InferenceRequest) -> ProviderFuture<'_, Vec<ProviderEvent>>;
 
+    /// Perform a streaming inference request, yielding events as they arrive.
     fn infer_stream(
         &self,
         request: InferenceRequest,

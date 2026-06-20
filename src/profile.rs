@@ -11,31 +11,46 @@ pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// rather than hang indefinitely.
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Protocol family that determines which request/response adapter a provider uses.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ApiFamily {
+    /// OpenAI Responses API (`/responses` endpoint).
     Responses,
+    /// OpenAI Chat Completions API (`/chat/completions` endpoint).
     Completions,
+    /// Anthropic Messages API (`/v1/messages` endpoint).
     Messages,
 }
 
+/// Wire-level authentication strategy applied to outgoing HTTP headers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AuthStrategy {
+    /// Send the credential as `Authorization: Bearer <token>`.
     BearerToken,
+    /// Send the credential in a named header without a prefix.
     ApiKeyHeader {
+        /// Header name that carries the API key.
         header_name: String,
     },
+    /// Send the credential in a named header with an optional prefix.
     Custom {
+        /// Header name that carries the credential.
         header_name: String,
+        /// Optional prefix prepended to the credential value (e.g. `"Bearer "`).
         prefix: Option<String>,
     },
+    /// No authentication headers are emitted.
     NoAuth,
 }
 
 /// Kind of credential a provider accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CredentialKind {
+    /// Static API key string.
     ApiKey,
+    /// OAuth bearer token with optional expiry.
     OAuthBearer,
+    /// No credential (anonymous/local access).
     NoAuth,
 }
 
@@ -45,12 +60,18 @@ pub enum CredentialKind {
 /// is owned by consuming layers such as `iron-core` or the application.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderCredential {
+    /// Static API key string.
     ApiKey(String),
+    /// OAuth bearer token with optional expiry and ID token.
     OAuthBearer {
+        /// Access token sent in the `Authorization` header.
         access_token: String,
+        /// When the access token expires. Expired tokens are rejected at connection time.
         expires_at: Option<std::time::SystemTime>,
+        /// Optional OIDC ID token retained for downstream use.
         id_token: Option<String>,
     },
+    /// No credential (anonymous/local access).
     NoAuth,
 }
 
@@ -64,6 +85,9 @@ impl ProviderCredential {
         }
     }
 
+    /// Return the raw secret string used for authentication.
+    ///
+    /// Returns an empty string for [`ProviderCredential::NoAuth`].
     pub fn secret(&self) -> &str {
         match self {
             ProviderCredential::ApiKey(v) => v,
@@ -76,43 +100,88 @@ impl ProviderCredential {
 /// Maps a supported credential kind to the wire auth strategy used for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialAuthConfig {
+    /// The credential kind this entry applies to.
     pub kind: CredentialKind,
+    /// The wire auth strategy used when this credential kind is presented.
     pub auth_strategy: AuthStrategy,
 }
 
+/// Whether a profile targets general-purpose or coding-optimized endpoints.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EndpointPurpose {
+    /// General-purpose inference endpoint.
     General,
+    /// Endpoint optimized for code generation tasks.
     Coding,
 }
 
+/// Provider-specific behavioral flags surfaced to callers.
+///
+/// These allow downstream code to work around known provider limitations
+/// without inspecting raw wire formats.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProviderQuirks {
+    /// Provider silently ignores `stop` sequences.
     pub ignores_stop_sequences: bool,
+    /// Provider silently ignores `top_k`.
     pub ignores_top_k: bool,
+    /// Provider does not support image inputs.
     pub no_image_support: bool,
+    /// Provider requires a prompt-cache key to enable caching.
     pub requires_prompt_cache_key: bool,
+    /// Provider-specific request parameter renames (e.g. `max_tokens` → `max_output_tokens`).
     pub param_renames: HashMap<String, String>,
 }
 
+/// Declarative provider configuration.
+///
+/// A profile fully describes how to connect to a provider: its API family,
+/// base URL, supported credential kinds, auth strategies, default headers,
+/// purpose, and behavioral quirks. All provider families honor the full
+/// profile model consistently.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::{ApiFamily, AuthStrategy, ProviderProfile};
+///
+/// let profile = ProviderProfile::new(
+///     "my-provider",
+///     ApiFamily::Completions,
+///     "https://api.example.com/v1",
+/// )
+/// .with_auth(AuthStrategy::BearerToken)
+/// .with_header("X-Custom-Header", "value");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderProfile {
+    /// Unique provider identifier used for registry lookups.
     pub slug: String,
+    /// Optional distinct `models.dev` provider identifier for model discovery.
     #[serde(default)]
     pub models_dev_id: Option<String>,
+    /// Protocol family determining the request/response adapter.
     pub family: ApiFamily,
+    /// Base URL for all provider requests.
     pub base_url: String,
+    /// Supported credential kinds and their wire auth strategies.
     pub credential_auth: Vec<CredentialAuthConfig>,
+    /// Default headers applied to every request unless overridden.
     #[serde(default)]
     pub default_headers: HashMap<String, String>,
+    /// Whether this profile targets general-purpose or coding-optimized endpoints.
     pub purpose: EndpointPurpose,
+    /// Provider-specific behavioral flags.
     #[serde(default)]
     pub quirks: ProviderQuirks,
+    /// Optional provider-specific system prompt guidance that overrides the
+    /// API-family fallback fragment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_guidance: Option<String>,
 }
 
 impl ProviderProfile {
+    /// Create a new provider profile with a default API-key bearer auth config.
     pub fn new(slug: impl Into<String>, family: ApiFamily, base_url: impl Into<String>) -> Self {
         Self {
             slug: slug.into(),
@@ -167,21 +236,25 @@ impl ProviderProfile {
             .map(|c| &c.auth_strategy)
     }
 
+    /// Set the optional `models.dev` provider identifier.
     pub fn with_models_dev_id(mut self, models_dev_id: impl Into<String>) -> Self {
         self.models_dev_id = Some(models_dev_id.into());
         self
     }
 
+    /// Add or replace a default header applied to every request.
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.default_headers.insert(key.into(), value.into());
         self
     }
 
+    /// Set whether this profile targets general-purpose or coding-optimized endpoints.
     pub fn with_purpose(mut self, purpose: EndpointPurpose) -> Self {
         self.purpose = purpose;
         self
     }
 
+    /// Set provider-specific behavioral quirks.
     pub fn with_quirks(mut self, quirks: ProviderQuirks) -> Self {
         self.quirks = quirks;
         self
@@ -194,6 +267,7 @@ impl ProviderProfile {
         self
     }
 
+    /// Return the `models.dev` slug, falling back to the profile slug when unset.
     pub fn models_dev_slug(&self) -> &str {
         self.models_dev_id.as_deref().unwrap_or(&self.slug)
     }
@@ -215,8 +289,32 @@ impl ProviderProfile {
     }
 }
 
+/// Per-session runtime configuration supplied when constructing a provider connection.
+///
+/// Holds the credential, optional HTTP timeouts, and an optional base URL override.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::{ProviderCredential, RuntimeConfig};
+/// use std::time::{Duration, SystemTime};
+///
+/// // API key (default)
+/// let rt = RuntimeConfig::new("your-api-key");
+///
+/// // OAuth bearer token
+/// let rt = RuntimeConfig::from_credential(ProviderCredential::OAuthBearer {
+///     access_token: "token".to_string(),
+///     expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+///     id_token: None,
+/// });
+///
+/// // No auth (local providers)
+/// let rt = RuntimeConfig::none();
+/// ```
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
+    /// Credential used for authentication.
     pub credential: ProviderCredential,
     /// TCP + TLS connect timeout. `None` uses `DEFAULT_CONNECT_TIMEOUT`.
     pub connect_timeout: Option<Duration>,
@@ -245,6 +343,7 @@ impl RuntimeConfig {
         }
     }
 
+    /// Construct a no-auth runtime config for local or anonymous providers.
     pub fn none() -> Self {
         Self {
             credential: ProviderCredential::NoAuth,
@@ -287,6 +386,9 @@ impl RuntimeConfig {
         self.read_timeout.unwrap_or(DEFAULT_READ_TIMEOUT)
     }
 
+    /// Validate that the credential is usable (non-empty, non-expired).
+    ///
+    /// Returns `ProviderError::auth` when validation fails.
     pub fn validate(&self) -> Result<(), ProviderError> {
         match &self.credential {
             ProviderCredential::NoAuth => Ok(()),
@@ -305,8 +407,12 @@ impl RuntimeConfig {
     }
 }
 
-/// Projection trait for caller-owned config types that can produce a `RuntimeConfig`.
+/// Projection trait for caller-owned config types that can produce a [`RuntimeConfig`].
+///
+/// Allows downstream crates to define their own configuration types that
+/// integrate with provider construction.
 pub trait RuntimeConfigSource {
+    /// Convert this configuration into a [`RuntimeConfig`].
     fn to_runtime_config(&self) -> Result<RuntimeConfig, ProviderError>;
 }
 

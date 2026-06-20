@@ -9,39 +9,72 @@ use thiserror::Error;
 /// Result type alias for provider operations
 pub type ProviderResult<T> = Result<T, ProviderError>;
 
-/// Structured provider errors
+/// Structured provider errors.
+///
+/// Each variant maps to a common failure class so downstream consumers can
+/// programmatically classify failures without parsing error strings.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::ProviderError;
+///
+/// let err = ProviderError::rate_limit("too many requests", Some(30));
+/// assert!(err.is_rate_limit());
+/// assert_eq!(err.retry_after(), Some(30));
+/// ```
 #[derive(Error, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProviderError {
     /// Authentication failure (invalid or missing API key)
     #[error("Authentication failed: {message}")]
-    Authentication { message: String },
+    Authentication {
+        /// Human-readable description of the authentication failure.
+        message: String,
+    },
 
     /// Transport/connection failure
     #[error("Transport error: {message}")]
-    Transport { message: String },
+    Transport {
+        /// Human-readable description of the transport failure.
+        message: String,
+    },
 
     /// Rate limit exceeded
     #[error("Rate limit exceeded: {message}")]
     RateLimit {
+        /// Human-readable description of the rate-limit failure.
         message: String,
+        /// Suggested seconds to wait before retrying, when the provider supplies one.
         retry_after: Option<u64>,
     },
 
     /// Malformed response from provider
     #[error("Malformed response: {message}")]
-    MalformedResponse { message: String },
+    MalformedResponse {
+        /// Human-readable description of what was malformed.
+        message: String,
+    },
 
     /// Invalid request parameters
     #[error("Invalid request: {message}")]
-    InvalidRequest { message: String },
+    InvalidRequest {
+        /// Human-readable description of the invalid request.
+        message: String,
+    },
 
     /// Model not found or unsupported
     #[error("Model error: {message}")]
-    Model { message: String },
+    Model {
+        /// Human-readable description of the model error.
+        message: String,
+    },
 
     /// General provider error (catch-all)
     #[error("Provider error: {message}")]
-    General { message: String },
+    General {
+        /// Human-readable description of the general error.
+        message: String,
+    },
 }
 
 impl ProviderError {
