@@ -1,6 +1,6 @@
 [package]
 name = "iron-providers"
-version = "0.2.10"
+version = "0.2.11"
 edition = "2021"
 authors = ["Paul Mooring"]
 license = "Apache-2.0"
