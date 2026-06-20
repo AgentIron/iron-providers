@@ -6,7 +6,7 @@ Multi-provider inference layer for AgentIron.
 
 ```toml
 [dependencies]
-iron-providers = "0.1"
+iron-providers = "0.2"
 ```
 
 Normalizes requests and responses across OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages API families through a profile-driven generic provider and registry.
@@ -41,7 +41,8 @@ Providers are grouped into four adapter families:
 
 ## Registry Usage
 
-```rust
+```rust,no_run
+# async fn run() -> iron_providers::ProviderResult<()> {
 use iron_providers::{
     InferenceRequest, Message, ProviderRegistry, RuntimeConfig, Transcript,
 };
@@ -58,6 +59,8 @@ let request = InferenceRequest::new("model-name", Transcript::with_messages(vec!
 ]));
 
 let events = provider.infer(request).await?;
+# Ok(())
+# }
 ```
 
 ### HTTP Timeouts
@@ -68,6 +71,7 @@ provider surfaces as a transport error instead of hanging the caller.
 Override per session on `RuntimeConfig`:
 
 ```rust
+# use iron_providers::RuntimeConfig;
 use std::time::Duration;
 
 let runtime = RuntimeConfig::new("key")
@@ -139,6 +143,7 @@ request
 Register custom providers with a profile:
 
 ```rust
+# fn main() -> iron_providers::ProviderResult<()> {
 use iron_providers::{
     ProviderRegistry, ProviderProfile, ApiFamily, AuthStrategy, RuntimeConfig,
 };
@@ -146,12 +151,14 @@ use iron_providers::{
 let mut registry = ProviderRegistry::new();
 
 registry.register(
-    ProviderProfile::new("my-provider", ApiFamily::OpenAiChatCompletions, "https://api.example.com/v1")
+    ProviderProfile::new("my-provider", ApiFamily::Completions, "https://api.example.com/v1")
         .with_auth(AuthStrategy::BearerToken)
         .with_header("X-Custom-Header", "value")
 );
 
 let provider = registry.get("my-provider", RuntimeConfig::new("key"))?;
+# Ok(())
+# }
 ```
 
 ### URL Pattern Resolution
@@ -159,9 +166,11 @@ let provider = registry.get("my-provider", RuntimeConfig::new("key"))?;
 For auto-detection based on endpoint URLs:
 
 ```rust
+use iron_providers::{ApiFamily, ProviderProfile, ProviderRegistry};
+# let mut registry = ProviderRegistry::new();
 registry.register_by_url_pattern(
     "https://api.openai.com/v1",
-    ProviderProfile::new("openai", ApiFamily::OpenAiResponses, "https://api.openai.com/v1"),
+    ProviderProfile::new("openai", ApiFamily::Responses, "https://api.openai.com/v1"),
 );
 
 let profile = registry.resolve_by_url("https://api.openai.com/v1/chat/completions");
@@ -170,6 +179,8 @@ let profile = registry.resolve_by_url("https://api.openai.com/v1/chat/completion
 ### Listing Available Providers
 
 ```rust
+# use iron_providers::ProviderRegistry;
+# let registry = ProviderRegistry::default();
 let slugs: Vec<&str> = registry.slugs();
 // Returns sorted list: ["anthropic", "kimi", "kimi-code", "minimax", "minimax-code", "openrouter", "requesty", "zai", "zai-code"]
 ```
@@ -180,7 +191,8 @@ Built-in and custom profiles can optionally declare a distinct `models.dev` prov
 identifier for client-side model discovery and caching.
 
 ```rust
-let profile = ProviderProfile::new("kimi", ApiFamily::OpenAiChatCompletions, "https://api.moonshot.ai/v1")
+use iron_providers::{ApiFamily, ProviderProfile};
+let profile = ProviderProfile::new("kimi", ApiFamily::Completions, "https://api.moonshot.ai/v1")
     .with_models_dev_id("moonshotai");
 
 assert_eq!(profile.models_dev_slug(), "moonshotai");
@@ -190,7 +202,7 @@ assert_eq!(profile.models_dev_slug(), "moonshotai");
 
 All providers implement the `Provider` trait:
 
-```rust
+```rust,ignore
 pub trait Provider: Send + Sync {
     fn infer(&self, request: InferenceRequest) -> ProviderFuture<'_, Vec<ProviderEvent>>;
     fn infer_stream(&self, request: InferenceRequest) -> ProviderFuture<'_, BoxStream<'static, ProviderResult<ProviderEvent>>>;
@@ -253,6 +265,7 @@ Available tasks:
 ```bash
 invoke build
 invoke test
+invoke docs
 invoke security
 ```
 
@@ -272,6 +285,7 @@ same checks CI can validate locally:
 ```bash
 inv build
 inv test
+inv docs
 inv security
 ```
 
@@ -280,7 +294,7 @@ inv security
 - Open a GitHub issue before starting work.
 - Create a feature branch for the issue and open a pull request against `main`.
 - Pull requests should reference an issue in the title or body when possible, for example `Closes #123`, but CI does not block PRs solely for missing issue references.
-- The `Pull Request` workflow runs `inv build` and `inv test` on every PR to `main`.
+- The `Pull Request` workflow runs `inv build`, `inv test`, and `inv docs` on every PR to `main`.
 - The `Pull Request` workflow runs `inv security` as a non-blocking audit and posts the output as a PR comment.
 - Merges to `main` trigger an automatic patch release that bumps `Cargo.toml`, creates a `vX.Y.Z` tag, creates a GitHub release, and publishes the crate to crates.io.
 - Coordinated `minor` and `major` releases are handled through the `Release Manual` workflow in GitHub Actions.
@@ -305,6 +319,25 @@ Repository configuration still matters:
 
 - `cargo generate-lockfile --manifest-path Cargo.toml` when needed
 - `cargo audit`
+
+`docs` runs:
+
+- `RUSTDOCFLAGS="-D warnings -D missing-docs" cargo doc --manifest-path Cargo.toml --no-deps --all-features`
+- `cargo test --manifest-path Cargo.toml --doc`
+
+## API Documentation
+
+Merges to `main` trigger the `Deploy Documentation` workflow, which builds
+rustdoc output and publishes it to GitHub Pages. The published documentation
+reflects the current `main` branch, not necessarily the latest crates.io
+release.
+
+To enable GitHub Pages for this repository:
+
+1. Go to **Settings > Pages**.
+2. Set **Source** to **GitHub Actions**.
+
+Once enabled, documentation is available at the repository's GitHub Pages URL.
 
 ## Testing
 

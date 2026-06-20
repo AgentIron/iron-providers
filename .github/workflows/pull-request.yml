@@ -39,6 +39,9 @@ jobs:
       - name: Test
         run: inv test
 
+      - name: Documentation
+        run: inv docs
+
       - name: Security audit
         id: audit
         continue-on-error: true

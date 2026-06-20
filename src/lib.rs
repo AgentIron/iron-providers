@@ -58,8 +58,11 @@
 pub mod connection;
 pub mod error;
 pub mod model;
+/// Provider profiles, credentials, and runtime configuration.
 pub mod profile;
+/// Semantic provider boundary consumed by `iron-core`.
 pub mod provider;
+/// Provider registry for slug and URL-based profile lookup.
 pub mod registry;
 
 pub(crate) mod apis;
@@ -86,6 +89,7 @@ pub use profile::{
 pub use provider::{Provider, ProviderFuture};
 pub use registry::ProviderRegistry;
 
+/// Convenience prelude re-exporting the most commonly used public items.
 pub mod prelude {
     pub use crate::{
         ApiFamily, AuthStrategy, ChoiceItem, ChoiceRequest, ChoiceSelectionMode, CredentialKind,
@@ -95,3 +99,7 @@ pub mod prelude {
         ToolDefinition, ToolPolicy, Transcript, CHOICE_REQUEST_TOOL_NAME,
     };
 }
+
+#[doc = include_str!("../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDoctests;

@@ -9,12 +9,28 @@ use crate::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Registry of provider profiles keyed by slug and URL pattern.
+///
+/// The registry holds built-in profiles for common providers and supports
+/// custom registration. Lookups are case-insensitive by slug. URL pattern
+/// resolution uses longest-prefix matching.
+///
+/// # Example
+///
+/// ```
+/// use iron_providers::{ProviderRegistry, RuntimeConfig};
+///
+/// let registry = ProviderRegistry::default();
+/// let provider = registry.get("anthropic", RuntimeConfig::new("key"))?;
+/// # Ok::<(), iron_providers::ProviderError>(())
+/// ```
 pub struct ProviderRegistry {
     profiles: HashMap<String, Arc<ProviderProfile>>,
     url_patterns: Vec<(String, Arc<ProviderProfile>)>,
 }
 
 impl ProviderRegistry {
+    /// Create an empty registry with no registered profiles.
     pub fn new() -> Self {
         Self {
             profiles: HashMap::new(),
@@ -22,11 +38,16 @@ impl ProviderRegistry {
         }
     }
 
+    /// Register a provider profile by its slug (case-insensitive).
     pub fn register(&mut self, profile: ProviderProfile) {
         let key = profile.slug.to_lowercase();
         self.profiles.insert(key, Arc::new(profile));
     }
 
+    /// Register a profile and associate it with a URL prefix for resolution
+    /// via [`ProviderRegistry::resolve_by_url`].
+    ///
+    /// The profile is also registered by slug so it can be looked up either way.
     pub fn register_by_url_pattern(
         &mut self,
         url_prefix: impl Into<String>,
@@ -38,6 +59,11 @@ impl ProviderRegistry {
         self.url_patterns.push((url_prefix.into(), profile));
     }
 
+    /// Look up a provider by slug (case-insensitive) and construct a
+    /// connection from the given runtime config.
+    ///
+    /// Returns a [`ProviderError::general`] when the slug is unknown and a
+    /// [`ProviderError::auth`] when the credential is invalid or unsupported.
     pub fn get(
         &self,
         provider_name: &str,
@@ -70,6 +96,11 @@ impl ProviderRegistry {
             .map(|arc| arc.as_ref())
     }
 
+    /// Resolve a single profile by its `models.dev` identifier.
+    ///
+    /// When multiple profiles share the same identifier, prefers one whose
+    /// slug matches the identifier, then falls back to the alphabetically
+    /// first match.
     pub fn resolve_by_models_dev_id(&self, models_dev_id: &str) -> Option<&ProviderProfile> {
         let matches = self.profiles_by_models_dev_id(models_dev_id);
         matches
@@ -79,6 +110,7 @@ impl ProviderRegistry {
             .or_else(|| matches.into_iter().next())
     }
 
+    /// Return all profiles matching a `models.dev` identifier, sorted by slug.
     pub fn profiles_by_models_dev_id(&self, models_dev_id: &str) -> Vec<&ProviderProfile> {
         let mut matches: Vec<&ProviderProfile> = self
             .profiles
@@ -94,12 +126,16 @@ impl ProviderRegistry {
         matches
     }
 
+    /// Return all registered slugs in sorted order.
     pub fn slugs(&self) -> Vec<&str> {
         let mut slugs: Vec<&str> = self.profiles.keys().map(|s| s.as_str()).collect();
         slugs.sort();
         slugs
     }
 
+    /// Resolve the provider-specific system prompt fragment for the given slug.
+    ///
+    /// Returns [`ProviderError::general`] when the slug is unknown.
     pub fn system_prompt_fragment(&self, provider_name: &str) -> ProviderResult<&str> {
         let key = provider_name.to_lowercase();
         let profile = self.profiles.get(&key).ok_or_else(|| {
@@ -112,6 +148,7 @@ impl ProviderRegistry {
         Ok(profile.system_prompt_fragment())
     }
 
+    /// Register all built-in provider profiles (anthropic, openai, zai, etc.).
     pub fn register_builtins(&mut self) {
         self.register(ProviderProfile::new(
             "openai",
