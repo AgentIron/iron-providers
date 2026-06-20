@@ -100,7 +100,7 @@ impl ProviderRegistry {
         slugs
     }
 
-    pub fn system_prompt_fragment(&self, provider_name: &str) -> ProviderResult<&'static str> {
+    pub fn system_prompt_fragment(&self, provider_name: &str) -> ProviderResult<&str> {
         let key = provider_name.to_lowercase();
         let profile = self.profiles.get(&key).ok_or_else(|| {
             let available: Vec<&str> = self.profiles.keys().map(|s| s.as_str()).collect();
@@ -420,6 +420,30 @@ mod tests {
         if let Err(e) = result {
             assert!(e.to_string().contains("Unknown provider"));
         }
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_custom_guidance() {
+        let mut registry = ProviderRegistry::new();
+        registry.register(
+            ProviderProfile::new("custom", ApiFamily::Messages, "https://example.com")
+                .with_provider_guidance("Custom provider-specific guidance."),
+        );
+        let fragment = registry.system_prompt_fragment("custom").unwrap();
+        assert_eq!(fragment, "Custom provider-specific guidance.");
+    }
+
+    #[test]
+    fn test_system_prompt_fragment_custom_guidance_case_insensitive() {
+        let mut registry = ProviderRegistry::new();
+        registry.register(
+            ProviderProfile::new("custom", ApiFamily::Messages, "https://example.com")
+                .with_provider_guidance("Custom guidance."),
+        );
+        let lower = registry.system_prompt_fragment("custom").unwrap();
+        let upper = registry.system_prompt_fragment("CUSTOM").unwrap();
+        assert_eq!(lower, upper);
+        assert_eq!(lower, "Custom guidance.");
     }
 
     #[test]
